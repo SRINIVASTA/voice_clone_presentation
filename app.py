@@ -7,6 +7,10 @@ st.set_page_config(page_title="AI Presentation Sync", page_icon="🎤", layout="
 st.title("🎤 Perfect-Timed AI Presentation Generator")
 st.write("Upload your assets to generate a perfectly synced audio timeline.")
 
+# Initialize generation version tracking to fix the browser audio player overlap bug
+if "generation_id" not in st.session_state:
+    st.session_state.generation_id = 0
+
 # 1. File Upload Fields
 uploaded_txt = st.file_uploader("Upload Presentation Timestamps (.txt)", type=["txt"])
 uploaded_voice = st.file_uploader("Upload Your Reference Voice Clone (.wav)", type=["wav"])
@@ -17,7 +21,7 @@ with st.sidebar:
     st.header("⚙️ App Settings")
     padding_time = st.number_input("End padding (seconds)", min_value=0.5, max_value=5.0, value=2.0, step=0.5)
     
-    # 🔒 Secure User Input field (Acts as a text slot on your local desktop app screen)
+    # 🔒 Secure User Input field
     user_hf_token = st.text_input(
         "Hugging Face Token (Optional)", 
         type="password", 
@@ -27,6 +31,9 @@ with st.sidebar:
 # 3. Compile Sequence Activation
 if uploaded_txt and uploaded_voice and ref_text:
     if st.button("🚀 Generate Presentation Audio", type="primary"):
+        # Increment version to immediately wipe old, stuck browser audio pipelines
+        st.session_state.generation_id += 1
+        
         with st.spinner("Processing timeline and stitching audio clips..."):
             try:
                 # Save input contents down to localized temporary files
@@ -49,9 +56,13 @@ if uploaded_txt and uploaded_voice and ref_text:
                 
                 st.success("🎉 Audio successfully compiled!")
                 
-                # Render Audio Output Stream
+                # Render Audio Output Stream with a unique runtime key to prevent overlap
                 with open(output_path, "rb") as audio_file:
-                    st.audio(audio_file.read(), format="audio/wav")
+                    st.audio(
+                        audio_file.read(), 
+                        format="audio/wav", 
+                        key=f"audio_player_v_{st.session_state.generation_id}"
+                    )
                 
                 # Actionable Download Component
                 with open(output_path, "rb") as file:
@@ -59,11 +70,15 @@ if uploaded_txt and uploaded_voice and ref_text:
                         label="💾 Download Presentation WAV",
                         data=file,
                         file_name="perfect_timed_presentation.wav",
-                        mime="audio/wav"
+                        mime="audio/wav",
+                        key=f"download_btn_v_{st.session_state.generation_id}"
                     )
-                    
+            
+            # UPDATED: Catch clear formatting/API limit warnings from utils.py directly
+            except ValueError as ve:
+                st.warning(f"⚠️ API Limit or Format Warning: {ve}")
             except Exception as e:
-                st.error(f"An error occurred during generation: {e}")
+                st.error(f"❌ An error occurred during generation: {e}")
             finally:
                 # Local environmental cleanup loop
                 for tmp_file in ["temp_presentation.txt", "temp_voice.wav"]:
