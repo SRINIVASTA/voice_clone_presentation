@@ -1,7 +1,6 @@
 import os
 import re
 import io
-import shutil
 from pydub import AudioSegment
 from gradio_client import Client, handle_file
 
@@ -10,9 +9,9 @@ def parse_time(time_str):
     return (m * 60 + s) * 1000
 
 def process_presentation(txt_path, voice_path, ref_text, output_path, padding_seconds):
-    # Establish a handshake with an alternative, premium open-access F5-TTS cluster
-    print("🛰️ Opening secure tunnel to F5-TTS infrastructure...")
-    client = Client("mrfakename/F5-TTS")
+    # Connecting directly to the verified open F5 cluster node
+    print("🛰️ Opening secure tunnel to F5-TTS cluster...")
+    client = Client("mrfakename/E2-F5-TTS")
 
     with open(txt_path, "r", encoding="utf-8") as f:
         content = f.read()
@@ -24,7 +23,7 @@ def process_presentation(txt_path, voice_path, ref_text, output_path, padding_se
     generated_segments = []
     max_required_duration = 0
 
-    # Package your voice track using the official Gradio file wrapper
+    # Package your voice track using the official Gradio file handler
     wrapped_voice = handle_file(voice_path)
 
     for start_time, speech_text in zip(timestamps, texts):
@@ -33,21 +32,19 @@ def process_presentation(txt_path, voice_path, ref_text, output_path, padding_se
 
         print(f"🎤 Remote generating text chunk for slot {start_time/1000}s...")
         
-        # Trigger generation using the endpoint structure
+        # Call the accurate API path route directly
         result = client.predict(
-            ref_audio_input=wrapped_voice,
-            ref_text_input=ref_text,
-            gen_text_input=speech_text,
+            ref_audio=wrapped_voice,
+            ref_text=ref_text,
+            gen_text=speech_text,
             remove_silence=False,
-            cross_fade_duration=0.15,
-            n_scale_ratio=1.0,
-            api_name="/infer"
+            api_name="/predict"
         )
         
-        # The API outputs a tuple where index 0 is the physical path to the complete .wav file
-        remote_wav_path = result[0]
+        # The result returns a list or direct string path depending on chunk layout
+        remote_wav_path = result[0] if isinstance(result, (list, tuple)) else result
         
-        # Load the bytes into our overlay system canvas
+        # Load the generated chunk into our timeline system canvas
         speech_segment = AudioSegment.from_file(remote_wav_path, format="wav")
         generated_segments.append((start_time, speech_segment))
         
@@ -55,7 +52,7 @@ def process_presentation(txt_path, voice_path, ref_text, output_path, padding_se
         if end_position > max_required_duration:
             max_required_duration = end_position
 
-    # Build our robust silent canvas timeline
+    # Build the silent canvas timeline layer
     padding_ms = int(padding_seconds * 1000)
     final_presentation_audio = AudioSegment.silent(duration=max_required_duration + padding_ms)
 
