@@ -1,14 +1,13 @@
 import streamlit as st
 import os
 from utils import process_presentation
-from pydub import AudioSegment
 
 st.set_page_config(page_title="AI Presentation Sync", page_icon="🎤", layout="centered")
 
 st.title("🎤 Perfect-Timed AI Presentation Generator")
 st.write("Upload your assets to generate a perfectly synced audio timeline.")
 
-# Initialize generation version tracking to fix the browser audio player overlap bug
+# Initialize generation version tracking to fix browser cache overlapping bugs
 if "generation_id" not in st.session_state:
     st.session_state.generation_id = 0
 
@@ -20,7 +19,7 @@ ref_text = st.text_input("Reference Text", value="Type the first sentence of you
 # 2. Variable Settings Section
 with st.sidebar:
     st.header("⚙️ App Settings")
-    # MODIFIED: min_value set to 0.0 to make padding completely optional
+    # min_value set to 0.0 to make padding completely optional
     padding_time = st.number_input(
         "End padding (seconds)", 
         min_value=0.0, 
@@ -30,7 +29,7 @@ with st.sidebar:
         help="Adds a silent buffer at the end of your presentation to prevent abrupt cutoffs. Set to 0.0 for no padding."
     )
     
-    # 🔒 Secure User Input field
+    # 🔒 Secure User Input field for public web cloud spaces
     user_hf_token = st.text_input(
         "Hugging Face Token (Optional)", 
         type="password", 
@@ -43,9 +42,9 @@ if uploaded_txt and uploaded_voice and ref_text:
         # Increment version to immediately wipe old, stuck browser audio pipelines
         st.session_state.generation_id += 1
         
-        with st.spinner("Processing timeline and stitching audio clips..."):
+        with st.spinner("Processing timeline and stitching audio clips via Cloud API..."):
             try:
-                # Save input contents down to localized temporary files
+                # Save input contents down to localized temporary cloud folders
                 with open("temp_presentation.txt", "wb") as f:
                     f.write(uploaded_txt.getbuffer())
                 with open("temp_voice.wav", "wb") as f:
@@ -63,16 +62,8 @@ if uploaded_txt and uploaded_voice and ref_text:
                     token=user_hf_token if user_hf_token else None
                 )
                 
-                # --- NEW: Read generated file directly to present a dynamic success banner ---
-                if os.path.exists(output_path):
-                    final_audio = AudioSegment.from_file(output_path, format="wav")
-                    total_seconds = len(final_audio) / 1000
-                    display_minutes = int(total_seconds // 60)
-                    display_seconds = int(total_seconds % 60)
-                    
-                    st.success(f"🎉 Audio successfully compiled! Track length: **{display_minutes}m {display_seconds}s**")
-                else:
-                    st.success("🎉 Audio successfully compiled!")
+                # UI success message block once file compilation finishes
+                st.success("🎉 Audio successfully compiled via cloud synthesis!")
                 
                 # Render Audio Output Stream with a unique runtime key to prevent overlap
                 with open(output_path, "rb") as audio_file:
@@ -98,7 +89,7 @@ if uploaded_txt and uploaded_voice and ref_text:
             except Exception as e:
                 st.error(f"❌ An error occurred during generation: {e}")
             finally:
-                # Local environmental cleanup loop
+                # Local environmental cleanup loop to prevent filling cloud cache disks
                 for tmp_file in ["temp_presentation.txt", "temp_voice.wav"]:
                     if os.path.exists(tmp_file):
                         os.remove(tmp_file)
