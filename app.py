@@ -1,6 +1,7 @@
 import streamlit as st
 import os
 from utils import process_presentation
+from pydub import AudioSegment
 
 st.set_page_config(page_title="AI Presentation Sync", page_icon="🎤", layout="centered")
 
@@ -19,7 +20,15 @@ ref_text = st.text_input("Reference Text", value="Type the first sentence of you
 # 2. Variable Settings Section
 with st.sidebar:
     st.header("⚙️ App Settings")
-    padding_time = st.number_input("End padding (seconds)", min_value=0.5, max_value=5.0, value=2.0, step=0.5)
+    # MODIFIED: min_value set to 0.0 to make padding completely optional
+    padding_time = st.number_input(
+        "End padding (seconds)", 
+        min_value=0.0, 
+        max_value=10.0, 
+        value=2.0, 
+        step=0.5,
+        help="Adds a silent buffer at the end of your presentation to prevent abrupt cutoffs. Set to 0.0 for no padding."
+    )
     
     # 🔒 Secure User Input field
     user_hf_token = st.text_input(
@@ -50,11 +59,20 @@ if uploaded_txt and uploaded_voice and ref_text:
                     "temp_voice.wav", 
                     ref_text, 
                     output_path, 
-                    padding_time,
+                    padding_time if padding_time is not None else 0.0,
                     token=user_hf_token if user_hf_token else None
                 )
                 
-                st.success("🎉 Audio successfully compiled!")
+                # --- NEW: Read generated file directly to present a dynamic success banner ---
+                if os.path.exists(output_path):
+                    final_audio = AudioSegment.from_file(output_path, format="wav")
+                    total_seconds = len(final_audio) / 1000
+                    display_minutes = int(total_seconds // 60)
+                    display_seconds = int(total_seconds % 60)
+                    
+                    st.success(f"🎉 Audio successfully compiled! Track length: **{display_minutes}m {display_seconds}s**")
+                else:
+                    st.success("🎉 Audio successfully compiled!")
                 
                 # Render Audio Output Stream with a unique runtime key to prevent overlap
                 with open(output_path, "rb") as audio_file:
@@ -74,7 +92,7 @@ if uploaded_txt and uploaded_voice and ref_text:
                         key=f"download_btn_v_{st.session_state.generation_id}"
                     )
             
-            # UPDATED: Catch clear formatting/API limit warnings from utils.py directly
+            # Catch clear formatting/API limit warnings from utils.py directly
             except ValueError as ve:
                 st.warning(f"⚠️ API Limit or Format Warning: {ve}")
             except Exception as e:
