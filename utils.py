@@ -45,7 +45,14 @@ def process_presentation(txt_path, voice_path, ref_text, output_path, padding_se
             api_name="/predict"
         )
         
-        remote_wav_path = result if isinstance(result, (list, tuple)) else result
+        # FIX: The Gradio API returns a tuple where index 0 is the temporary .wav path
+        if isinstance(result, (list, tuple)):
+            remote_wav_path = result[0]
+        else:
+            remote_wav_path = result
+            
+        if not remote_wav_path or not os.path.exists(str(remote_wav_path)):
+            raise ValueError(f"The TTS backend returned an invalid file path format: {result}")
         
         # Load local sound properties into timeline matrices
         speech_segment = AudioSegment.from_file(remote_wav_path, format="wav")
