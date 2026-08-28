@@ -1,4 +1,4 @@
 audioop-lts
 streamlit>=1.30.0
 pydub>=0.25.1
-requests>=2.31.0
+gradio_client>=1.0.0
