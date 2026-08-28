@@ -1,6 +1,13 @@
+# --- CRUCIAL PYTHON 3.14 AUDIOOP PATCH ---
+import sys
+import audioop_lts
+sys.modules['pyaudioop'] = audioop_lts
+# ------------------------------------------
+
 import streamlit as st
 import os
 from utils import process_presentation
+# ... (rest of your app.py code stays exactly the same)
 
 st.set_page_config(page_title="AI Presentation Sync", page_icon="🎤", layout="centered")
 
