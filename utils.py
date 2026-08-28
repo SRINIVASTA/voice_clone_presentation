@@ -1,22 +1,18 @@
 import os
 import re
 import io
-import requests
+import shutil
 from pydub import AudioSegment
+from gradio_client import Client, handle_file
 
 def parse_time(time_str):
     m, s = map(int, time_str.split(':'))
     return (m * 60 + s) * 1000
 
 def process_presentation(txt_path, voice_path, ref_text, output_path, padding_seconds):
-    # Fetch your token directly from Streamlit Secrets
-    HF_TOKEN = os.environ.get("HF_TOKEN")
-    if not HF_TOKEN:
-        raise ValueError("Missing HF_TOKEN. Please add it to your Streamlit Secrets panel.")
-
-    # API Endpoint for the official F5-TTS model on Hugging Face
-    API_URL = "https://huggingface.co"
-    headers = {"Authorization": f"Bearer {HF_TOKEN}"}
+    # Establish a handshake with an alternative, premium open-access F5-TTS cluster
+    print("🛰️ Opening secure tunnel to F5-TTS infrastructure...")
+    client = Client("mrfakename/F5-TTS")
 
     with open(txt_path, "r", encoding="utf-8") as f:
         content = f.read()
@@ -28,42 +24,44 @@ def process_presentation(txt_path, voice_path, ref_text, output_path, padding_se
     generated_segments = []
     max_required_duration = 0
 
-    # Read the voice sample once
-    with open(voice_path, "rb") as f:
-        voice_bytes = f.read()
+    # Package your voice track using the official Gradio file wrapper
+    wrapped_voice = handle_file(voice_path)
 
     for start_time, speech_text in zip(timestamps, texts):
         if not speech_text: 
             continue
 
-        # Send request to Hugging Face free Inference API
-        payload = {
-            "inputs": speech_text,
-            "parameters": {
-                "ref_audio": voice_bytes.hex(), # Transmit audio properties safely
-                "ref_text": ref_text
-            }
-        }
+        print(f"🎤 Remote generating text chunk for slot {start_time/1000}s...")
         
-        response = requests.post(API_URL, headers=headers, json=payload)
+        # Trigger generation using the endpoint structure
+        result = client.predict(
+            ref_audio_input=wrapped_voice,
+            ref_text_input=ref_text,
+            gen_text_input=speech_text,
+            remove_silence=False,
+            cross_fade_duration=0.15,
+            n_scale_ratio=1.0,
+            api_name="/infer"
+        )
         
-        if response.status_code != 200:
-            raise RuntimeError(f"Hugging Face API Error: {response.text}")
-
-        # Convert returned API audio data bytes into a Pydub segment
-        speech_segment = AudioSegment.from_file(io.BytesIO(response.content), format="wav")
+        # The API outputs a tuple where index 0 is the physical path to the complete .wav file
+        remote_wav_path = result[0]
+        
+        # Load the bytes into our overlay system canvas
+        speech_segment = AudioSegment.from_file(remote_wav_path, format="wav")
         generated_segments.append((start_time, speech_segment))
         
         end_position = start_time + len(speech_segment)
         if end_position > max_required_duration:
             max_required_duration = end_position
 
-    # Build the silent canvas timeline
+    # Build our robust silent canvas timeline
     padding_ms = int(padding_seconds * 1000)
     final_presentation_audio = AudioSegment.silent(duration=max_required_duration + padding_ms)
 
-    # Seamlessly overlay audio onto timestamps
+    # Map the generated chunks precisely onto the timeline coordinates
     for start_time, speech_segment in generated_segments:
         final_presentation_audio = final_presentation_audio.overlay(speech_segment, position=start_time)
 
     final_presentation_audio.export(output_path, format="wav")
+    print("🎉 Sync sequence complete!")
