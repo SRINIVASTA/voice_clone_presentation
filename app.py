@@ -1,8 +1,11 @@
-# --- CRUCIAL PYTHON 3.14 AUDIOOP PATCH ---
+# --- CRUCIAL PYTHON 3.14 PYDUB IMPORT PATCH ---
 import sys
-import audioop_lts
-sys.modules['pyaudioop'] = audioop_lts
-# ------------------------------------------
+try:
+    import audioop
+    sys.modules['pyaudioop'] = audioop
+except ImportError:
+    pass
+# -----------------------------------------------
 
 import streamlit as st
 import os
