@@ -24,7 +24,7 @@ if "generation_id" not in st.session_state:
 # 1. File Upload Fields
 uploaded_txt = st.file_uploader("Upload Presentation Timestamps (.txt)", type=["txt"])
 uploaded_voice = st.file_uploader("Upload Your Reference Voice Clone (.wav)", type=["wav"])
-ref_text = st.text_input("Reference Text", value="Type the first sentence of your voice recording here.")
+ref_text = st.text_input("Reference Text", value="This is a recording of my own voice to train the AI model in Kolab")
 
 # 2. Variable Settings Section
 with st.sidebar:
