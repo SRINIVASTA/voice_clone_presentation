@@ -11,7 +11,7 @@ def parse_time(time_str):
 def split_text_into_sentences(text):
     """
     Splits long presentation paragraphs into clean individual sentences.
-    This guarantees Hugging Face never hits a token limit.
+    This guarantees the web API nodes never hit a token limit.
     """
     sentence_endings = re.compile(r'(?<=[.!?])\s+')
     sentences = sentence_endings.split(text)
@@ -19,35 +19,33 @@ def split_text_into_sentences(text):
 
 def generate_single_chunk(client, wrapped_voice, ref_text, text_chunk):
     """
-    Sends a text fragment to the API node using a flexible keyword layout to prevent parameter errors.
+    Sends a text fragment to the current active web cluster API node.
     """
     try:
-        # --- FIXED: Added the required speed argument and wrapped as explicit dictionary parameters ---
+        # Connect to the primary production space using baseline parameters
         result = client.predict(
             ref_audio=wrapped_voice,
             ref_text=ref_text,
             gen_text=text_chunk,
             remove_silence=False,
-            speed=1.0,  # New required parameter for the upgraded F5 space schema
             api_name="/predict"
         )
         
-        # Handle backend list, dictionary, or tuple data structural wrappers
+        # Extract the pure path from Gradio's multi-value response structures
         remote_wav_path = None
         if isinstance(result, (list, tuple)) and len(result) > 0:
-            remote_wav_path = result[0]  # Take file path and ignore the transcription string
+            remote_wav_path = result[0]  # Grab file path array index cleanly
         elif isinstance(result, dict) and "name" in result:
             remote_wav_path = result["name"]
         elif isinstance(result, str):
             remote_wav_path = result
             
         if not remote_wav_path or not os.path.exists(str(remote_wav_path)):
-            print(f"⚠️ API returned an unparseable object or missing path: {result}")
             return None
             
         return AudioSegment.from_file(remote_wav_path, format="wav")
     except Exception as e:
-        print(f"⚠️ Micro-chunk processing exception triggered on node: {e}")
+        print(f"⚠️ Web API processing segment error: {e}")
         return None
 
 def process_timestamp_block(client, wrapped_voice, ref_text, full_text, start_time):
@@ -58,8 +56,7 @@ def process_timestamp_block(client, wrapped_voice, ref_text, full_text, start_ti
     if not chunks:
         return None
 
-    print(f"📦 Slide at {start_time/1000}s split dynamically into {len(chunks)} segments.")
-
+    # Run sequentially (max_workers=1) to prevent the web host from blocking your API requests
     with ThreadPoolExecutor(max_workers=1) as chunk_executor:
         chunk_futures = [
             chunk_executor.submit(generate_single_chunk, client, wrapped_voice, ref_text, chk)
@@ -71,21 +68,22 @@ def process_timestamp_block(client, wrapped_voice, ref_text, full_text, start_ti
     if not valid_chunks:
         return None
 
-    combined_slide_audio = valid_chunks
+    combined_slide_audio = valid_chunks[0]
     for next_chunk in valid_chunks[1:]:
         combined_slide_audio += next_chunk
 
     return (start_time, combined_slide_audio)
 
 def process_presentation(txt_path, voice_path, ref_text, output_path, padding_seconds, token=None):
-    print("🛰 ] Booting Corrected Presentation Pipeline Nodes...")
+    print("🛰️ Establishing connection with production voice clusters...")
     
-    target_space = "mrfakename/E2-F5-TTS"
+    # --- SWAPPED: Target the official and stable fallback mirror cluster ---
+    target_space = "f5-tts/F5-TTS"
     
     try:
         client = Client(target_space, token=token) if token else Client(target_space)
     except Exception as e:
-        raise ValueError(f"Failed to connect to primary repository architecture: {e}")
+        raise ValueError(f"Failed to connect to the cloud model engine: {e}")
 
     with open(txt_path, "r", encoding="utf-8") as f:
         content = f.read()
@@ -96,7 +94,7 @@ def process_presentation(txt_path, voice_path, ref_text, output_path, padding_se
 
     wrapped_voice = handle_file(voice_path)
     
-    # Process text chunks in safe single lane mode to guarantee stability under user credentials
+    # Process text chunks in safe single-lane mode to guarantee web stability
     with ThreadPoolExecutor(max_workers=1) as slide_executor:
         slide_futures = [
             slide_executor.submit(process_timestamp_block, client, wrapped_voice, ref_text, text, t)
@@ -107,8 +105,9 @@ def process_presentation(txt_path, voice_path, ref_text, output_path, padding_se
     generated_slides = [r for r in slide_results if r is not None]
     
     if not generated_slides:
-        raise ValueError("The server backend returned null objects. Check your terminal output logs to trace parameter structures.")
+        raise ValueError("The web API refused the connection or returned an unparseable data layout. Try removing or regenerating your Hugging Face Token.")
 
+    # Find the maximum duration needed on the timeline
     max_required_duration = max(start_time + len(audio_segment) for start_time, audio_segment in generated_slides)
     
     padding_ms = int(padding_seconds * 1000)
@@ -122,4 +121,4 @@ def process_presentation(txt_path, voice_path, ref_text, output_path, padding_se
     total_seconds = len(final_presentation_audio) / 1000
     display_minutes = int(total_seconds // 60)
     display_seconds = int(total_seconds % 60)
-    print(f"🎉 {display_minutes}m {display_seconds}s Compiled Successfully.")
+    print(f"🎉 {display_minutes}m {display_seconds}s Compiled Successfully via Web API.")
