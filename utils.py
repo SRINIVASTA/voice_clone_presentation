@@ -19,34 +19,35 @@ def split_text_into_sentences(text):
 
 def generate_single_chunk(client, wrapped_voice, ref_text, text_chunk):
     """
-    Sends a text fragment to the API node and extracts the absolute path correctly.
+    Sends a text fragment to the API node using a flexible keyword layout to prevent parameter errors.
     """
     try:
-        # Utilizing the alternative, highly-stable primary model engine path
+        # --- FIXED: Added the required speed argument and wrapped as explicit dictionary parameters ---
         result = client.predict(
             ref_audio=wrapped_voice,
             ref_text=ref_text,
             gen_text=text_chunk,
             remove_silence=False,
+            speed=1.0,  # New required parameter for the upgraded F5 space schema
             api_name="/predict"
         )
         
-        # --- FIXED: Explicitly handle both lists, dicts, and tuple structures ---
+        # Handle backend list, dictionary, or tuple data structural wrappers
         remote_wav_path = None
         if isinstance(result, (list, tuple)) and len(result) > 0:
-            remote_wav_path = result[0]
+            remote_wav_path = result[0]  # Take file path and ignore the transcription string
         elif isinstance(result, dict) and "name" in result:
             remote_wav_path = result["name"]
         elif isinstance(result, str):
             remote_wav_path = result
             
         if not remote_wav_path or not os.path.exists(str(remote_wav_path)):
-            print(f"⚠️ API returned a path that couldn't be loaded: {result}")
+            print(f"⚠️ API returned an unparseable object or missing path: {result}")
             return None
             
         return AudioSegment.from_file(remote_wav_path, format="wav")
     except Exception as e:
-        print(f"⚠️ Micro-chunk synthesis skipped due to endpoint processing error: {e}")
+        print(f"⚠️ Micro-chunk processing exception triggered on node: {e}")
         return None
 
 def process_timestamp_block(client, wrapped_voice, ref_text, full_text, start_time):
@@ -57,36 +58,34 @@ def process_timestamp_block(client, wrapped_voice, ref_text, full_text, start_ti
     if not chunks:
         return None
 
-    print(f"📦 Slide at {start_time/1000}s split dynamically into {len(chunks)} text segments.")
+    print(f"📦 Slide at {start_time/1000}s split dynamically into {len(chunks)} segments.")
 
-    with ThreadPoolExecutor(max_workers=2) as chunk_executor:
+    with ThreadPoolExecutor(max_workers=1) as chunk_executor:
         chunk_futures = [
             chunk_executor.submit(generate_single_chunk, client, wrapped_voice, ref_text, chk)
             for chk in chunks
         ]
         chunk_results = [f.result() for f in chunk_futures]
 
-    # Stitch the individual sentences together into one continuous slide audio
     valid_chunks = [c for c in chunk_results if c is not None]
     if not valid_chunks:
         return None
 
-    combined_slide_audio = valid_chunks[0]
+    combined_slide_audio = valid_chunks
     for next_chunk in valid_chunks[1:]:
-        combined_slide_audio += next_chunk  # Seamless appending
+        combined_slide_audio += next_chunk
 
     return (start_time, combined_slide_audio)
 
 def process_presentation(txt_path, voice_path, ref_text, output_path, padding_seconds, token=None):
-    print("🛰️ Booting Production Presentation Engine...")
+    print("🛰 ] Booting Corrected Presentation Pipeline Nodes...")
     
-    # --- SWAPPED: Target the robust primary production space instance ---
     target_space = "mrfakename/E2-F5-TTS"
     
     try:
         client = Client(target_space, token=token) if token else Client(target_space)
     except Exception as e:
-        raise ValueError(f"Failed to establish connection to the model hub pipeline: {e}")
+        raise ValueError(f"Failed to connect to primary repository architecture: {e}")
 
     with open(txt_path, "r", encoding="utf-8") as f:
         content = f.read()
@@ -97,7 +96,7 @@ def process_presentation(txt_path, voice_path, ref_text, output_path, padding_se
 
     wrapped_voice = handle_file(voice_path)
     
-    # Process text chunks in small batches to stay completely clear of rate limits
+    # Process text chunks in safe single lane mode to guarantee stability under user credentials
     with ThreadPoolExecutor(max_workers=1) as slide_executor:
         slide_futures = [
             slide_executor.submit(process_timestamp_block, client, wrapped_voice, ref_text, text, t)
@@ -108,9 +107,8 @@ def process_presentation(txt_path, voice_path, ref_text, output_path, padding_se
     generated_slides = [r for r in slide_results if r is not None]
     
     if not generated_slides:
-        raise ValueError("The backend api refused the connection or returned an unparseable object layout. Ensure your Hugging Face Token has active 'Read' permissions.")
+        raise ValueError("The server backend returned null objects. Check your terminal output logs to trace parameter structures.")
 
-    # Dynamically find the absolute end of your presentation timeline matrix
     max_required_duration = max(start_time + len(audio_segment) for start_time, audio_segment in generated_slides)
     
     padding_ms = int(padding_seconds * 1000)
@@ -124,5 +122,4 @@ def process_presentation(txt_path, voice_path, ref_text, output_path, padding_se
     total_seconds = len(final_presentation_audio) / 1000
     display_minutes = int(total_seconds // 60)
     display_seconds = int(total_seconds % 60)
-    
-    print(f"🎉 {display_minutes}m {display_seconds}s Compatible Master Audio Output Compiled Successfully.")
+    print(f"🎉 {display_minutes}m {display_seconds}s Compiled Successfully.")
