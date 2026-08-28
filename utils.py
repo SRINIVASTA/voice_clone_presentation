@@ -19,22 +19,22 @@ def split_text_into_sentences(text):
 
 def generate_single_chunk(client, wrapped_voice, ref_text, text_chunk):
     """
-    Sends a text fragment to the current active web cluster API node.
+    Sends a text fragment to the official F5-TTS API cluster node.
     """
     try:
-        # Connect to the primary production space using baseline parameters
+        # Connect to the official primary space layout with correct parameters
         result = client.predict(
-            ref_audio=wrapped_voice,
-            ref_text=ref_text,
-            gen_text=text_chunk,
+            ref_audio_input=wrapped_voice,
+            ref_text_input=ref_text,
+            gen_text_input=text_chunk,
             remove_silence=False,
-            api_name="/predict"
+            api_name="/infer"
         )
         
-        # Extract the pure path from Gradio's multi-value response structures
+        # Safely extract the valid .wav track file path from multi-value return matrices
         remote_wav_path = None
         if isinstance(result, (list, tuple)) and len(result) > 0:
-            remote_wav_path = result[0]  # Grab file path array index cleanly
+            remote_wav_path = result[0]
         elif isinstance(result, dict) and "name" in result:
             remote_wav_path = result["name"]
         elif isinstance(result, str):
@@ -56,7 +56,7 @@ def process_timestamp_block(client, wrapped_voice, ref_text, full_text, start_ti
     if not chunks:
         return None
 
-    # Run sequentially (max_workers=1) to prevent the web host from blocking your API requests
+    # Sequential processing loop protects your token lane from scraping bans
     with ThreadPoolExecutor(max_workers=1) as chunk_executor:
         chunk_futures = [
             chunk_executor.submit(generate_single_chunk, client, wrapped_voice, ref_text, chk)
@@ -68,17 +68,17 @@ def process_timestamp_block(client, wrapped_voice, ref_text, full_text, start_ti
     if not valid_chunks:
         return None
 
-    combined_slide_audio = valid_chunks[0]
+    combined_slide_audio = valid_chunks
     for next_chunk in valid_chunks[1:]:
         combined_slide_audio += next_chunk
 
     return (start_time, combined_slide_audio)
 
 def process_presentation(txt_path, voice_path, ref_text, output_path, padding_seconds, token=None):
-    print("🛰️ Establishing connection with production voice clusters...")
+    print("🛰️ Connecting to the official SWivid production server cluster...")
     
-    # --- SWAPPED: Target the official and stable fallback mirror cluster ---
-    target_space = "f5-tts/F5-TTS"
+    # --- SWAPPED: Target the official primary repository repository hub ---
+    target_space = "SWivid/F5-TTS"
     
     try:
         client = Client(target_space, token=token) if token else Client(target_space)
@@ -94,7 +94,7 @@ def process_presentation(txt_path, voice_path, ref_text, output_path, padding_se
 
     wrapped_voice = handle_file(voice_path)
     
-    # Process text chunks in safe single-lane mode to guarantee web stability
+    # Run through sequentially to guarantee safe server-side rate limits
     with ThreadPoolExecutor(max_workers=1) as slide_executor:
         slide_futures = [
             slide_executor.submit(process_timestamp_block, client, wrapped_voice, ref_text, text, t)
@@ -105,9 +105,8 @@ def process_presentation(txt_path, voice_path, ref_text, output_path, padding_se
     generated_slides = [r for r in slide_results if r is not None]
     
     if not generated_slides:
-        raise ValueError("The web API refused the connection or returned an unparseable data layout. Try removing or regenerating your Hugging Face Token.")
+        raise ValueError("The server backend returned null objects. Ensure your Hugging Face Token has active 'Read' permissions.")
 
-    # Find the maximum duration needed on the timeline
     max_required_duration = max(start_time + len(audio_segment) for start_time, audio_segment in generated_slides)
     
     padding_ms = int(padding_seconds * 1000)
@@ -121,4 +120,4 @@ def process_presentation(txt_path, voice_path, ref_text, output_path, padding_se
     total_seconds = len(final_presentation_audio) / 1000
     display_minutes = int(total_seconds // 60)
     display_seconds = int(total_seconds % 60)
-    print(f"🎉 {display_minutes}m {display_seconds}s Compiled Successfully via Web API.")
+    print(f"🎉 {display_minutes}m {display_seconds}s Compiled Successfully via Official Web API.")
