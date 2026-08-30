@@ -19,16 +19,16 @@ def split_text_into_sentences(text):
 
 def generate_single_chunk(client, wrapped_voice, ref_text, text_chunk):
     """
-    Sends a text fragment to the official F5-TTS API cluster node.
+    Sends a text fragment to an active F5-TTS API cluster node.
     """
     try:
-        # Connect to the official primary space layout with correct parameters
+        # Connect to a live layout with parameters expected by standard active Spaces
         result = client.predict(
             ref_audio_input=wrapped_voice,
             ref_text_input=ref_text,
             gen_text_input=text_chunk,
             remove_silence=False,
-            speed=1.0,  # Explicitly passed parameter expected by the SWivid API
+            speed=1.0,  # Explicit speed multi-factor required by standard spaces
             api_name="/infer"
         )
         
@@ -69,21 +69,24 @@ def process_timestamp_block(client, wrapped_voice, ref_text, full_text, start_ti
     if not valid_chunks:
         return None
 
-    # --- FIX: Properly initialize an empty AudioSegment to stitch chunks ---
+    # Properly initialize an empty AudioSegment to stitch chunks
     combined_slide_audio = AudioSegment.empty()
     for chunk in valid_chunks:
         combined_slide_audio += chunk
-        combined_slide_audio += AudioSegment.silent(duration=200) # Subtle sentence-break pause
+        combined_slide_audio += AudioSegment.silent(duration=200) # Subtle natural sentence-break pause
 
     return (start_time, combined_slide_audio)
 
 def process_presentation(txt_path, voice_path, ref_text, output_path, padding_seconds, token=None):
-    print("🛰️ Connecting to the official SWivid production server cluster...")
+    print("🛰️ Connecting to a live production server cluster...")
     
-    # Target the official primary repository hub
-    target_space = "SWivid/F5-TTS"
+    # 🎯 THE FIX: Target a verified, running alternative space.
+    # If you choose to host your own dedicated space clone, swap this string out 
+    # with your personal space ID (e.g., "YourUsername/YourSpaceName")
+    target_space = "m-a-p/F5-TTS"
     
     try:
+        # Pass the token explicitly if entered by the user
         client = Client(target_space, token=token) if token else Client(target_space)
     except Exception as e:
         raise ValueError(f"Failed to connect to the cloud model engine: {e}")
@@ -108,7 +111,7 @@ def process_presentation(txt_path, voice_path, ref_text, output_path, padding_se
     generated_slides = [r for r in slide_results if r is not None]
     
     if not generated_slides:
-        raise ValueError("The server backend returned null objects. Ensure your Hugging Face Token has active 'Read' permissions.")
+        raise ValueError("The server backend returned null objects. If traffic is heavy, please provide your personal Hugging Face Token.")
 
     max_required_duration = max(start_time + len(audio_segment) for start_time, audio_segment in generated_slides)
     
