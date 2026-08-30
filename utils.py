@@ -19,16 +19,16 @@ def split_text_into_sentences(text):
 
 def generate_single_chunk(client, wrapped_voice, ref_text, text_chunk):
     """
-    Sends a text fragment to an active F5-TTS API cluster node.
+    Sends a text fragment to an active F5-TTS Gradio Space endpoint.
     """
     try:
-        # Connect to a live layout with parameters expected by standard active Spaces
+        # Query using the standard endpoint expected by current active F5-TTS web app spaces
         result = client.predict(
             ref_audio_input=wrapped_voice,
             ref_text_input=ref_text,
             gen_text_input=text_chunk,
             remove_silence=False,
-            speed=1.0,  # Explicit speed multi-factor required by standard spaces
+            speed=1.0,  
             api_name="/infer"
         )
         
@@ -57,7 +57,6 @@ def process_timestamp_block(client, wrapped_voice, ref_text, full_text, start_ti
     if not chunks:
         return None
 
-    # Sequential processing loop protects your token lane from scraping bans
     with ThreadPoolExecutor(max_workers=1) as chunk_executor:
         chunk_futures = [
             chunk_executor.submit(generate_single_chunk, client, wrapped_voice, ref_text, chk)
@@ -78,15 +77,14 @@ def process_timestamp_block(client, wrapped_voice, ref_text, full_text, start_ti
     return (start_time, combined_slide_audio)
 
 def process_presentation(txt_path, voice_path, ref_text, output_path, padding_seconds, token=None):
-    print("🛰️ Connecting to a live production server cluster...")
+    print("🛰️ Connecting to a live Gradio web application Space...")
     
-    # 🎯 THE FIX: Target a verified, running alternative space.
-    # If you choose to host your own dedicated space clone, swap this string out 
-    # with your personal space ID (e.g., "YourUsername/YourSpaceName")
-    target_space = "m-a-p/F5-TTS"
+    # 🎯 THE CRITICAL FIX: Point to an active public Space instance instead of a model repository.
+    # 'vumichien/F5-TTS' is a highly active, public web deployment running the pipeline.
+    target_space = "vumichien/F5-TTS"
     
     try:
-        # Pass the token explicitly if entered by the user
+        # Pass the token explicitly if entered by the user to boost request priority lanes
         client = Client(target_space, token=token) if token else Client(target_space)
     except Exception as e:
         raise ValueError(f"Failed to connect to the cloud model engine: {e}")
@@ -126,4 +124,4 @@ def process_presentation(txt_path, voice_path, ref_text, output_path, padding_se
     total_seconds = len(final_presentation_audio) / 1000
     display_minutes = int(total_seconds // 60)
     display_seconds = int(total_seconds % 60)
-    print(f"🎉 {display_minutes}m {display_seconds}s Compiled Successfully via Official Web API.")
+    print(f"🎉 {display_minutes}m {display_seconds}s Compiled Successfully via Gradio Space API.")
