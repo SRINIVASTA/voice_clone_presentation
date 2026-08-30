@@ -10,7 +10,6 @@ except ImportError:
 import streamlit as st
 import os
 from utils import process_presentation
-# ... (rest of your app.py code stays exactly the same)
 
 st.set_page_config(page_title="AI Presentation Sync", page_icon="🎤", layout="centered")
 
@@ -75,12 +74,12 @@ if uploaded_txt and uploaded_voice and ref_text:
                 # UI success message block once file compilation finishes
                 st.success("🎉 Audio successfully compiled via cloud synthesis!")
                 
-                # Render Audio Output Stream with a unique runtime key to prevent overlap
+                # Render Audio Output Stream
+                # FIXED: Removed 'key' parameter to prevent MediaMixin.audio() error
                 with open(output_path, "rb") as audio_file:
                     st.audio(
                         audio_file.read(), 
-                        format="audio/wav", 
-                        key=f"audio_player_v_{st.session_state.generation_id}"
+                        format="audio/wav"
                     )
                 
                 # Actionable Download Component
