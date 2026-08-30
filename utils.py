@@ -28,6 +28,7 @@ def generate_single_chunk(client, wrapped_voice, ref_text, text_chunk):
             ref_text_input=ref_text,
             gen_text_input=text_chunk,
             remove_silence=False,
+            speed=1.0,  # Explicitly passed parameter expected by the SWivid API
             api_name="/infer"
         )
         
@@ -68,16 +69,18 @@ def process_timestamp_block(client, wrapped_voice, ref_text, full_text, start_ti
     if not valid_chunks:
         return None
 
-    combined_slide_audio = valid_chunks
-    for next_chunk in valid_chunks[1:]:
-        combined_slide_audio += next_chunk
+    # --- FIX: Properly initialize an empty AudioSegment to stitch chunks ---
+    combined_slide_audio = AudioSegment.empty()
+    for chunk in valid_chunks:
+        combined_slide_audio += chunk
+        combined_slide_audio += AudioSegment.silent(duration=200) # Subtle sentence-break pause
 
     return (start_time, combined_slide_audio)
 
 def process_presentation(txt_path, voice_path, ref_text, output_path, padding_seconds, token=None):
     print("🛰️ Connecting to the official SWivid production server cluster...")
     
-    # --- SWAPPED: Target the official primary repository repository hub ---
+    # Target the official primary repository hub
     target_space = "SWivid/F5-TTS"
     
     try:
