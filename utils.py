@@ -3,8 +3,8 @@ import os
 import re
 import time
 import base64
+import requests
 from pydub import AudioSegment
-from huggingface_hub import InferenceClient
 
 def parse_time(time_str):
     m, s = map(int, time_str.split(':'))
@@ -15,72 +15,67 @@ def split_text_into_sentences(text):
     sentences = sentence_endings.split(text)
     return [s.strip() for s in sentences if s.strip()]
 
-def generate_single_chunk(client, voice_bytes_b64, ref_text, text_chunk):
+def generate_single_chunk(voice_bytes_b64, ref_text, text_chunk, token):
     """
-    Synthesizes voice chunks natively through the standard Inference Client text-to-speech mapping.
-    This schema guarantees proper internal dictionary formatting over the cloud gateway.
+    Directly routes structured payloads via clean HTTP POST calls to the F5-TTS container.
+    Bypasses text_to_speech client wrappers to prevent infinite buffering parameters.
     """
-    max_retries = 3
-    for attempt in range(max_retries):
-        try:
-            # 🌟 NATIVE INFERENCE: Calls text_to_speech directly to manage payload construction automatically
-            # Targeted directly at the official base model path
-            response_bytes = client.text_to_speech(
-                text=str(text_chunk).strip(),
-                model="m-a-p/F5-TTS",
-                parameters={
-                    "reference_audio": str(voice_bytes_b64),
-                    "reference_text": str(ref_text).strip()
-                }
-            )
+    # Using the optimized serverless router lane for stable processing
+    url = "https://huggingface.co"
+    headers = {
+        "Authorization": f"Bearer {token.strip()}",
+        "Content-Type": "application/json"
+    }
+    
+    # 🌟 FIXED CRITICAL PAYLOAD: F5-TTS architecture matches this exact schema layout
+    payload = {
+        "inputs": str(text_chunk).strip(),
+        "parameters": {
+            "reference_audio": str(voice_bytes_b64),
+            "reference_text": str(ref_text).strip()
+        }
+    }
+    
+    # Basic single handshake block to break infinite buffering on server congestion
+    try:
+        response = requests.post(url, headers=headers, json=payload, timeout=45)
+        
+        # Explicit status checks instead of hanging loop paths
+        if response.status_code == 503:
+            print("⏳ Model is currently spinning up on serverless nodes. Waiting 10s...")
+            time.sleep(10)
+            # Single backup handshake query
+            response = requests.post(url, headers=headers, json=payload, timeout=45)
             
-            # Catch raw waveform audio binary back cleanly
-            if response_bytes and len(response_bytes) > 1000:
-                return AudioSegment.from_file(io.BytesIO(response_bytes))
-                
-        except Exception as e:
-            # Detect model warming up errors (503) or gateway overloads (504)
-            err_msg = str(e)
-            if "503" in err_msg or "loading" in err_msg.lower():
-                print(f"⏳ Model is currently loading on Hugging Face nodes... Waiting 15s...")
-                time.sleep(15)
-                continue
-            elif "504" in err_msg:
-                print(f"⏳ Gateway timeout encountered. Retrying segment...")
-                time.sleep(5)
-                continue
-            else:
-                print(f"⚠️ Chunk compilation warning: {e}")
-                time.sleep(3)
-                
+        if response.status_code == 200 and len(response.content) > 1000:
+            return AudioSegment.from_file(io.BytesIO(response.content))
+            
+        print(f"⚠️ Server returned unhandled code ({response.status_code}) - Data chunk skipped.")
+    except Exception as e:
+        print(f"⚠️ Gateway transmission exception error: {e}")
+        
     return None
 
 def process_presentation(txt_path, voice_path, ref_text, output_path, padding_seconds, token=None):
-    print("🛰️ Connecting via Hugging Face Inference Client Suite...")
+    print("🛰️ Synchronizing timeline data tracks across cluster networks...")
     
     if not token or not token.strip():
-        raise ValueError("A valid Hugging Face User Access Token is required to authenticate. Please check the sidebar box.")
+        raise ValueError("A fully privileged Hugging Face Access Token is required to complete generation.")
 
-    try:
-        # Initialize official inference gateway engine handler
-        client = InferenceClient(token=token.strip())
-    except Exception as e:
-        raise ValueError(f"Failed to securely initialize the Hugging Face client: {e}")
-
-    # --- REFERENCE SOUND PROFILING CONSTRAINTS ---
+    # --- NORMALIZE SPEAKER PROFILE ---
     try:
         raw_voice = AudioSegment.from_file(voice_path)
-        # Downsample file size footprints to prevent 504 proxy transfer cuts
-        optimized_voice = raw_voice[:10000] # Clean 10s tracking footprint
+        # Force a lean 8-second file snippet footprint block to guarantee fast transfers
+        optimized_voice = raw_voice[:8000] 
         optimized_voice = optimized_voice.set_frame_rate(24000).set_channels(1).set_sample_width(2)
         
         buffer = io.BytesIO()
         optimized_voice.export(buffer, format="wav", codec="pcm_s16le")
         voice_bytes_b64 = base64.b64encode(buffer.getvalue()).decode("utf-8")
     except Exception as audio_err:
-        raise ValueError(f"Failed to normalize input vocal blueprint: {audio_err}")
+        raise ValueError(f"Failed to cleanly normalize input speaker profile track: {audio_err}")
 
-    # --- READ TIMELINE PRESENTATION TEXT FILE ---
+    # --- DECODE PRESENTATION SCRIPTS ---
     with open(txt_path, "r", encoding="utf-8") as f:
         content = f.read()
 
@@ -94,20 +89,20 @@ def process_presentation(txt_path, voice_path, ref_text, output_path, padding_se
     final_presentation_audio = AudioSegment.empty()
     current_timeline_position = 0
 
-    # --- SECTION 1: COMPILING THE INTRO TRACK AS SLIDE 1 ---
-    print("🎤 Generating Slide 1 Intro narration baseline...")
+    # --- LAYOUT SEGMENT 1: INJECT THE REFERENCE OVERLAY AS INTRO SLIDE 1 ---
+    print("🎤 Directing baseline intro track...")
     ref_chunks = split_text_into_sentences(ref_text)
     for chunk in ref_chunks:
-        sentence_audio = generate_single_chunk(client, voice_bytes_b64, ref_text, chunk)
+        sentence_audio = generate_single_chunk(voice_bytes_b64, ref_text, chunk, token)
         if sentence_audio:
             final_presentation_audio += sentence_audio
             final_presentation_audio += AudioSegment.silent(duration=200)
             
-    final_presentation_audio += AudioSegment.silent(duration=1500) # Structural slide buffer gap
+    final_presentation_audio += AudioSegment.silent(duration=1500) # Slide transition break gap
     intro_duration = len(final_presentation_audio)
     current_timeline_position = intro_duration
 
-    # --- SECTION 2: PROCESSING THE REMAINING TIMELINE SEGMENTS ---
+    # --- LAYOUT SEGMENT 2: MERGE REMAINING TIMELINE PARAGRAPHS ---
     for idx, (start_time, full_text) in enumerate(zip(timestamps, texts)):
         if not full_text or not full_text.strip():
             continue
@@ -117,15 +112,15 @@ def process_presentation(txt_path, voice_path, ref_text, output_path, padding_se
         block_audio = AudioSegment.empty()
 
         for chunk in chunks:
-            # Substitute quick shortcuts on the fly so the acoustic voice handles pronunciation smoothly
+            # Swap acronym terms to guarantee smooth vocal execution profiles
             clean_chunk = chunk.replace("ML", "machine learning").replace("UI", "user interface").replace("JS", "javascript").replace("PDF", "document report")
             
-            sentence_audio = generate_single_chunk(client, voice_bytes_b64, ref_text, clean_chunk)
+            sentence_audio = generate_single_chunk(voice_bytes_b64, ref_text, clean_chunk, token)
             if sentence_audio:
                 block_audio += sentence_audio
                 block_audio += AudioSegment.silent(duration=200)
 
-        # Build chronological spacing dynamically onto the timeline audio grid canvas
+        # Build precise chronological silence pacing arrays onto the master layout grid canvas
         if shifted_start_time > current_timeline_position:
             silence_needed = shifted_start_time - current_timeline_position
             final_presentation_audio += AudioSegment.silent(duration=silence_needed)
@@ -134,9 +129,9 @@ def process_presentation(txt_path, voice_path, ref_text, output_path, padding_se
         final_presentation_audio += block_audio
         current_timeline_position += len(block_audio)
 
-    # Halt compilation if everything processed as perfect silence due to network drops
+    # Halt file creation if public node overloads returned empty segments
     if len(final_presentation_audio) <= intro_duration + 500:
-        raise ValueError("The public serverless inference nodes are currently overloaded. Please wait 1 minute and click generate again.")
+        raise ValueError("The public server clusters are completely full. No audio data was generated. Please wait 1 minute and click generate again.")
 
     if padding_seconds > 0:
         final_presentation_audio += AudioSegment.silent(duration=int(padding_seconds * 1000))
