@@ -29,11 +29,13 @@ def generate_single_chunk(client, voice_path, ref_text, text_chunk):
             api_name="/infer"
         )
         
-        # Gradio spaces return a string path containing the temporary audio file path
+        # Gradio spaces return a string or list path containing the temporary audio file path
         if isinstance(result, (list, tuple)) and len(result) > 0:
             generated_audio_path = result[0]
             if os.path.exists(generated_audio_path):
                 return AudioSegment.from_file(generated_audio_path)
+        elif isinstance(result, str) and os.path.exists(result):
+            return AudioSegment.from_file(result)
                 
     except Exception as e:
         print(f"⚠️ Gradio API execution segment timeout error: {e}")
@@ -45,14 +47,14 @@ def process_presentation(txt_path, voice_path, ref_text, output_path, padding_se
     clean_token = token.strip() if (token and token.strip()) else None
     
     try:
-        # 🌟 FIXED: Gracefully falls back to 'token' to resolve the Client.init() crash
+        # 🌟 FIXED: Targets the working public space cluster (lucasnewman/f5-tts)
         if clean_token:
             try:
-                client = Client("m-a-p/F5-TTS", token=clean_token)
+                client = Client("lucasnewman/f5-tts", token=clean_token)
             except TypeError:
-                client = Client("m-a-p/F5-TTS", hf_token=clean_token)
+                client = Client("lucasnewman/f5-tts", hf_token=clean_token)
         else:
-            client = Client("m-a-p/F5-TTS")
+            client = Client("lucasnewman/f5-tts")
     except Exception as e:
         raise ValueError(f"Failed to securely handshake with the Gradio API cluster: {e}")
 
