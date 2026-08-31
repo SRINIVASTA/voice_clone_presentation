@@ -2,3 +2,4 @@ streamlit
 gradio_client
 audioop-lts
 pydub
+f5_tts
