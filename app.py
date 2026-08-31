@@ -9,6 +9,7 @@ except ImportError:
 
 import streamlit as st
 import os
+import re
 from utils import process_presentation
 
 st.set_page_config(page_title="AI Presentation Sync", page_icon="🎤", layout="centered")
@@ -16,39 +17,64 @@ st.set_page_config(page_title="AI Presentation Sync", page_icon="🎤", layout="
 st.title("🎤 Perfect-Timed AI Presentation Generator")
 st.write("Upload your assets to generate a perfectly synced audio timeline.")
 
-# Initialize generation version tracking to fix browser cache overlapping bugs
+# Initialize state trackers
 if "generation_id" not in st.session_state:
     st.session_state.generation_id = 0
+if "auto_ref_text" not in st.session_state:
+    st.session_state.auto_ref_text = "This is a recording of my own voice to train the AI model in Kolab"
 
-# 1. File Upload Fields
+# 1. Presentation Text File Uploader
 uploaded_txt = st.file_uploader("Upload Presentation Timestamps (.txt)", type=["txt"])
-uploaded_voice = st.file_uploader("Upload Your Reference Voice Clone (.wav)", type=["wav"])
-ref_text = st.text_input("Reference Text", value="This is a recording of my own voice to train the AI model in Kolab")
 
-# 2. Variable Settings Section
+# 🌟 AUTOMATIC EXTRACTION ENGINE FOR THE REFERENCE TEXT BOX
+if uploaded_txt is not None:
+    try:
+        # Read the uploaded file bytes safely
+        bytes_data = uploaded_txt.getvalue()
+        file_content = bytes_data.decode("utf-8")
+        
+        # Split text by the first timestamp bracket to get the initial slide paragraph
+        segments = re.split(r'\[\d{2}:\d{2}\]', file_content)
+        
+        # Extract the very first non-empty text content segment block
+        for seg in segments:
+            cleaned_seg = seg.strip()
+            if cleaned_seg:
+                # Dynamically push the slide script into our session input memory pipeline
+                st.session_state.auto_ref_text = cleaned_seg
+                break
+    except Exception as e:
+        pass
+
+# 2. Render Remaining Input Elements
+uploaded_voice = st.file_uploader("Upload Your Reference Voice Clone (.wav)", type=["wav"])
+
+# The box now references our live dynamic listener tracking memory state!
+ref_text = st.text_input(
+    "Reference Text (Automatically synced from your uploaded file script)", 
+    value=st.session_state.auto_ref_text
+)
+
+# 3. Variable Settings Section
 with st.sidebar:
     st.header("⚙️ App Settings")
-    # min_value set to 0.0 to make padding completely optional
     padding_time = st.number_input(
         "End padding (seconds)", 
         min_value=0.0, 
         max_value=10.0, 
         value=2.0, 
         step=0.5,
-        help="Adds a silent buffer at the end of your presentation to prevent abrupt cutoffs. Set to 0.0 for no padding."
+        help="Adds a silent buffer at the end of your presentation to prevent abrupt cutoffs."
     )
-    
-    # 🔒 Secure User Input field for public web cloud spaces
     user_hf_token = st.text_input(
         "Hugging Face Token (Optional)", 
         type="password", 
         help="Paste a personal token here if public shared channels are busy."
     )
 
-# 3. Compile Sequence Activation
+# 4. Compile Sequence Activation
 if uploaded_txt and uploaded_voice and ref_text:
     if st.button("🚀 Generate Presentation Audio", type="primary"):
-        # Increment version to immediately wipe old, stuck browser audio pipelines
         st.session_state.generation_id += 1
         
         with st.spinner("Processing timeline and stitching audio clips via Cloud API..."):
@@ -61,7 +87,7 @@ if uploaded_txt and uploaded_voice and ref_text:
                 
                 output_path = "perfect_timed_presentation.wav"
                 
-                # Forward files and custom token to our parsing engine
+                # Forward arguments directly to our utils timeline engine
                 process_presentation(
                     "temp_presentation.txt", 
                     "temp_voice.wav", 
@@ -71,18 +97,11 @@ if uploaded_txt and uploaded_voice and ref_text:
                     token=user_hf_token if user_hf_token else None
                 )
                 
-                # UI success message block once file compilation finishes
                 st.success("🎉 Audio successfully compiled via cloud synthesis!")
                 
-                # Render Audio Output Stream
-                # FIXED: Removed 'key' parameter to prevent MediaMixin.audio() error
                 with open(output_path, "rb") as audio_file:
-                    st.audio(
-                        audio_file.read(), 
-                        format="audio/wav"
-                    )
+                    st.audio(audio_file.read(), format="audio/wav")
                 
-                # Actionable Download Component
                 with open(output_path, "rb") as file:
                     st.download_button(
                         label="💾 Download Presentation WAV",
@@ -91,14 +110,11 @@ if uploaded_txt and uploaded_voice and ref_text:
                         mime="audio/wav",
                         key=f"download_btn_v_{st.session_state.generation_id}"
                     )
-            
-            # Catch clear formatting/API limit warnings from utils.py directly
             except ValueError as ve:
                 st.warning(f"⚠️ API Limit or Format Warning: {ve}")
             except Exception as e:
                 st.error(f"❌ An error occurred during generation: {e}")
             finally:
-                # Local environmental cleanup loop to prevent filling cloud cache disks
                 for tmp_file in ["temp_presentation.txt", "temp_voice.wav"]:
                     if os.path.exists(tmp_file):
                         os.remove(tmp_file)
