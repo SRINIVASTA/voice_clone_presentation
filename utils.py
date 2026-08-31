@@ -16,11 +16,9 @@ def split_text_into_sentences(text):
 def generate_single_chunk(client, voice_path, ref_text, text_chunk):
     """
     Leverages gradio_client to synthesize zero-shot TTS blocks natively.
-    Guarantees no raw payload string errors or empty silent matrices.
     """
     try:
         # Connect explicitly to the official F5-TTS structural processing function
-        # Using Gradio's secure internal predictive file-stream handlers
         result = client.predict(
             ref_audio_input=file(voice_path),
             ref_text_input=str(ref_text).strip(),
@@ -31,7 +29,7 @@ def generate_single_chunk(client, voice_path, ref_text, text_chunk):
             api_name="/infer"
         )
         
-        # Gradio spaces return a dictionary containing [Output Audio Path, Output Spectrogram Image Path]
+        # Gradio spaces return a string path containing the temporary audio file path
         if isinstance(result, (list, tuple)) and len(result) > 0:
             generated_audio_path = result[0]
             if os.path.exists(generated_audio_path):
@@ -44,10 +42,17 @@ def generate_single_chunk(client, voice_path, ref_text, text_chunk):
 def process_presentation(txt_path, voice_path, ref_text, output_path, padding_seconds, token=None):
     print("🛰️ Connecting via Gradio Cloud Streaming Client...")
     
+    clean_token = token.strip() if (token and token.strip()) else None
+    
     try:
-        # Target the primary high-velocity official space container for F5-TTS
-        # If user provided a token, append it for authenticated high-priority lanes
-        client = Client("m-a-p/F5-TTS", hf_token=token.strip() if token else None)
+        # 🌟 FIXED: Gracefully falls back to 'token' to resolve the Client.init() crash
+        if clean_token:
+            try:
+                client = Client("m-a-p/F5-TTS", token=clean_token)
+            except TypeError:
+                client = Client("m-a-p/F5-TTS", hf_token=clean_token)
+        else:
+            client = Client("m-a-p/F5-TTS")
     except Exception as e:
         raise ValueError(f"Failed to securely handshake with the Gradio API cluster: {e}")
 
