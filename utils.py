@@ -26,7 +26,7 @@ def generate_single_chunk(voice_bytes_b64, ref_text, text_chunk, token):
         "Content-Type": "application/json"
     }
     
-    # 🌟 CRUCIAL API MAPPING LAYOUT
+    # 🌟 CRUCIAL API MAPPING LAYOUT - REQUIRED BY THE API GATEWAY
     payload = {
         "inputs": text_chunk,
         "parameters": {
@@ -42,11 +42,13 @@ def generate_single_chunk(voice_bytes_b64, ref_text, text_chunk, token):
             
             # If the model is resting, wait for the server to load weights
             if response.status_code == 503:
+                print(f"⏳ Model is currently warming up on the cloud nodes. Retrying in 15 seconds...")
                 time.sleep(15)
                 continue
                 
-            # Handle server congestions/timeouts 
+            # Handle server congestions / timeouts 
             if response.status_code == 504:
+                print(f"⏳ Server hit a gateway timeout. Retrying segment...")
                 time.sleep(5)
                 continue
                 
@@ -54,8 +56,9 @@ def generate_single_chunk(voice_bytes_b64, ref_text, text_chunk, token):
             if response.status_code == 200 and len(response.content) > 1000:
                 return AudioSegment.from_file(io.BytesIO(response.content))
                 
-            print(f"⚠️ Server Response Code ({response.status_code}) - Retrying chunk...")
+            print(f"⚠️ Unexpected server output code ({response.status_code}) - Retrying chunk...")
         except Exception as e:
+            print(f"⚠️ Network error encountered on chunk generation: {e}")
             time.sleep(3)
             
     return None
@@ -115,7 +118,7 @@ def process_presentation(txt_path, voice_path, ref_text, output_path, padding_se
         block_audio = AudioSegment.empty()
 
         for chunk in chunks:
-            # Swap acronyms so the TTS model engine doesn't hit processing glitches
+            # Swap abbreviations so the cloud TTS engine doesn't hit spelling crashes
             clean_chunk = chunk.replace("ML", "machine learning").replace("UI", "user interface").replace("JS", "javascript").replace("PDF", "document report")
             
             sentence_audio = generate_single_chunk(voice_bytes_b64, ref_text, clean_chunk, token)
@@ -141,3 +144,4 @@ def process_presentation(txt_path, voice_path, ref_text, output_path, padding_se
 
     # Master Output Save
     final_presentation_audio.export(output_path, format="wav", codec="pcm_s16le")
+    print("🎉 Total Presentation Timeline Compiled Successfully.")
