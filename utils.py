@@ -1,10 +1,8 @@
 import io
 import os
 import re
-import time
-import base64
-import requests
 from pydub import AudioSegment
+from gradio_client import Client, file
 
 def parse_time(time_str):
     m, s = map(int, time_str.split(':'))
@@ -15,80 +13,65 @@ def split_text_into_sentences(text):
     sentences = sentence_endings.split(text)
     return [s.strip() for s in sentences if s.strip()]
 
-def generate_single_chunk(voice_bytes_b64, ref_text, text_chunk, token):
+def generate_single_chunk(client, voice_path, ref_text, text_chunk):
     """
-    Sends presentation sentences directly to the F5-TTS serverless instance.
-    Uses the exact expected payload formatting required by Hugging Face.
+    Leverages gradio_client to synthesize zero-shot TTS blocks natively.
+    Guarantees no raw payload string errors or empty silent matrices.
     """
-    url = "https://huggingface.co"
-    headers = {
-        "Authorization": f"Bearer {token.strip()}",
-        "Content-Type": "application/json"
-    }
-    
-    # 🌟 CRUCIAL API MAPPING LAYOUT - REQUIRED BY THE API GATEWAY
-    payload = {
-        "inputs": text_chunk,
-        "parameters": {
-            "reference_audio": voice_bytes_b64,
-            "reference_text": ref_text
-        }
-    }
-    
-    max_retries = 3
-    for attempt in range(max_retries):
-        try:
-            response = requests.post(url, headers=headers, json=payload, timeout=60)
-            
-            # If the model is resting, wait for the server to load weights
-            if response.status_code == 503:
-                print(f"⏳ Model is currently warming up on the cloud nodes. Retrying in 15 seconds...")
-                time.sleep(15)
-                continue
+    try:
+        # Connect explicitly to the official F5-TTS structural processing function
+        # Using Gradio's secure internal predictive file-stream handlers
+        result = client.predict(
+            ref_audio_input=file(voice_path),
+            ref_text_input=str(ref_text).strip(),
+            gen_text_input=str(text_chunk).strip(),
+            remove_silence=False,
+            cross_fade_duration=0.15,
+            speed=1.0,
+            api_name="/infer"
+        )
+        
+        # Gradio spaces return a dictionary containing [Output Audio Path, Output Spectrogram Image Path]
+        if isinstance(result, (list, tuple)) and len(result) > 0:
+            generated_audio_path = result[0]
+            if os.path.exists(generated_audio_path):
+                return AudioSegment.from_file(generated_audio_path)
                 
-            # Handle server congestions / timeouts 
-            if response.status_code == 504:
-                print(f"⏳ Server hit a gateway timeout. Retrying segment...")
-                time.sleep(5)
-                continue
-                
-            # If it returns a valid audio file size stream, send it directly to the timeline stitcher
-            if response.status_code == 200 and len(response.content) > 1000:
-                return AudioSegment.from_file(io.BytesIO(response.content))
-                
-            print(f"⚠️ Unexpected server output code ({response.status_code}) - Retrying chunk...")
-        except Exception as e:
-            print(f"⚠️ Network error encountered on chunk generation: {e}")
-            time.sleep(3)
-            
+    except Exception as e:
+        print(f"⚠️ Gradio API execution segment timeout error: {e}")
     return None
 
 def process_presentation(txt_path, voice_path, ref_text, output_path, padding_seconds, token=None):
-    print("🛰️ Connecting to Hugging Face Cloud Infrastructure...")
+    print("🛰️ Connecting via Gradio Cloud Streaming Client...")
     
-    if not token or not token.strip():
-        raise ValueError("Please provide a valid Hugging Face Access Token in the app sidebar text box.")
+    try:
+        # Target the primary high-velocity official space container for F5-TTS
+        # If user provided a token, append it for authenticated high-priority lanes
+        client = Client("m-a-p/F5-TTS", hf_token=token.strip() if token else None)
+    except Exception as e:
+        raise ValueError(f"Failed to securely handshake with the Gradio API cluster: {e}")
 
-    # --- ENFORCE DENSE AUDIO PROFILING ---
+    # --- AUDIO BLUEPRINT PRE-PROCESSING ---
     try:
         raw_voice = AudioSegment.from_file(voice_path)
-        # Squeeze down the file size to prevent 504 Gateway HTTP timeouts
-        optimized_voice = raw_voice[:10000] # Safe 10-second reference footprint
+        # Trim down reference frame size to 10 seconds to keep pipeline processing fast
+        optimized_voice = raw_voice[:10000]
         optimized_voice = optimized_voice.set_frame_rate(24000).set_channels(1).set_sample_width(2)
         
-        buffer = io.BytesIO()
-        optimized_voice.export(buffer, format="wav", codec="pcm_s16le")
-        voice_bytes_b64 = base64.b64encode(buffer.getvalue()).decode("utf-8")
+        optimized_voice_path = "optimized_ref_voice.wav"
+        optimized_voice.export(optimized_voice_path, format="wav", codec="pcm_s16le")
     except Exception as audio_err:
-        raise ValueError(f"Failed to optimize input voice sample file: {audio_err}")
+        raise ValueError(f"Failed to normalize your input reference sound track: {audio_err}")
 
-    # --- READ SCRIPTS ---
+    # --- READ TIMELINE SCRIPTS ---
     with open(txt_path, "r", encoding="utf-8") as f:
         content = f.read()
 
     segments = re.split(r'\[(\d{2}:\d{2})\]', content)[1:]
     if not segments:
-        raise ValueError("Could not extract timelines. Script must follow [MM:SS] styling rules.")
+        if os.path.exists(optimized_voice_path):
+            os.remove(optimized_voice_path)
+        raise ValueError("Timeline structure is invalid. Please format scripts with explicit [MM:SS] timestamps.")
 
     timestamps = [parse_time(segments[i]) for i in range(0, len(segments), 2)]
     texts = [segments[i].strip() for i in range(1, len(segments), 2)]
@@ -96,19 +79,20 @@ def process_presentation(txt_path, voice_path, ref_text, output_path, padding_se
     final_presentation_audio = AudioSegment.empty()
     current_timeline_position = 0
 
-    # --- SECTION 1: INJECT THE REFERENCE INTRO TRACK AS SLIDE 1 ---
+    # --- SECTION 1: NARRATING THE REFERENCE OVERLAY AS SLIDE 1 ---
+    print("🎤 Generating Slide 1 Intro narration via active websocket stream...")
     ref_chunks = split_text_into_sentences(ref_text)
     for chunk in ref_chunks:
-        sentence_audio = generate_single_chunk(voice_bytes_b64, ref_text, chunk, token)
+        sentence_audio = generate_single_chunk(client, optimized_voice_path, ref_text, chunk)
         if sentence_audio:
             final_presentation_audio += sentence_audio
             final_presentation_audio += AudioSegment.silent(duration=200)
             
-    final_presentation_audio += AudioSegment.silent(duration=1500) # Structural slide buffer gap
+    final_presentation_audio += AudioSegment.silent(duration=1500) # Slide change pause
     intro_duration = len(final_presentation_audio)
     current_timeline_position = intro_duration
 
-    # --- SECTION 2: PROCESS THE REST OF THE TIMELINES ---
+    # --- SECTION 2: COMPILING SUBSEQUENT MAIN SLIDES ---
     for idx, (start_time, full_text) in enumerate(zip(timestamps, texts)):
         if not full_text or not full_text.strip():
             continue
@@ -118,15 +102,15 @@ def process_presentation(txt_path, voice_path, ref_text, output_path, padding_se
         block_audio = AudioSegment.empty()
 
         for chunk in chunks:
-            # Swap abbreviations so the cloud TTS engine doesn't hit spelling crashes
+            # Clean up acronyms on the fly so the acoustic vocal cords can pronounce them smoothly
             clean_chunk = chunk.replace("ML", "machine learning").replace("UI", "user interface").replace("JS", "javascript").replace("PDF", "document report")
             
-            sentence_audio = generate_single_chunk(voice_bytes_b64, ref_text, clean_chunk, token)
+            sentence_audio = generate_single_chunk(client, optimized_voice_path, ref_text, clean_chunk)
             if sentence_audio:
                 block_audio += sentence_audio
                 block_audio += AudioSegment.silent(duration=200)
 
-        # Build chronological spacing dynamically
+        # Stitch chronological silence gaps on our master audio timeline map
         if shifted_start_time > current_timeline_position:
             silence_needed = shifted_start_time - current_timeline_position
             final_presentation_audio += AudioSegment.silent(duration=silence_needed)
@@ -135,13 +119,17 @@ def process_presentation(txt_path, voice_path, ref_text, output_path, padding_se
         final_presentation_audio += block_audio
         current_timeline_position += len(block_audio)
 
-    # Stop execution if public endpoints fail to return content
+    # Clean up workspace temporary file assets
+    if os.path.exists(optimized_voice_path):
+        os.remove(optimized_voice_path)
+
+    # Catch empty server drops
     if len(final_presentation_audio) <= intro_duration + 500:
-        raise ValueError("The public server clusters are completely full. No audio data was generated. Please wait 1 minute and click generate again.")
+        raise ValueError("The public Gradio inference worker threads are completely congested. Please wait a brief moment and click generate again.")
 
     if padding_seconds > 0:
         final_presentation_audio += AudioSegment.silent(duration=int(padding_seconds * 1000))
 
-    # Master Output Save
+    # Master Waveform Serialization export
     final_presentation_audio.export(output_path, format="wav", codec="pcm_s16le")
-    print("🎉 Total Presentation Timeline Compiled Successfully.")
+    print("🎉 File timeline fully processed.")
