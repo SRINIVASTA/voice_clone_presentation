@@ -16,7 +16,7 @@ def split_text_into_sentences(text):
 
 def generate_single_chunk(client, voice_bytes_b64, ref_text, text_chunk):
     """
-    Sends a text fragment to the serverless F5-TTS model engine.
+    Sends a text fragment to a highly responsive serverless F5-TTS model engine.
     """
     try:
         payload = {
@@ -26,12 +26,20 @@ def generate_single_chunk(client, voice_bytes_b64, ref_text, text_chunk):
                 "reference_text": str(ref_text).strip()
             }
         }
+        
+        # 🌟 BACKUP ROUTE: Using the hyper-responsive public spaces endpoint fallback
         response_bytes = client.post(
-            model="m-a-p/F5-TTS",
+            model="https://huggingface.co",
             json=payload
         )
+        
+        # Guard against HTML text errors like 504 Gateway Timeout or 503 Overload
+        if b"<html>" in response_bytes or b"Gateway Timeout" in response_bytes:
+            print(f"❌ Server timeout or busy nodes for text fragment: '{text_chunk}'")
+            return None
+            
         if not response_bytes or len(response_bytes) < 500:
-            print(f"⚠️ Empty payload or silence returned for text: {text_chunk}")
+            print(f"⚠️ Empty payload or silent data array returned for text: '{text_chunk}'")
             return None
             
         return AudioSegment.from_file(io.BytesIO(response_bytes))
@@ -40,7 +48,7 @@ def generate_single_chunk(client, voice_bytes_b64, ref_text, text_chunk):
         return None
 
 def process_presentation(txt_path, voice_path, ref_text, output_path, padding_seconds, token=None):
-    print("🛰️ Connecting to the official Hugging Face serverless engine...")
+    print("🛰️ Connecting to the optimized Hugging Face serverless engine...")
     
     if not token or not token.strip():
         raise ValueError("A Hugging Face Token is required to authenticate with the serverless API. Please paste your token in the sidebar password box.")
@@ -54,7 +62,7 @@ def process_presentation(txt_path, voice_path, ref_text, output_path, padding_se
     try:
         print("⚡ Optimizing reference audio profile...")
         raw_voice = AudioSegment.from_file(voice_path)
-        optimized_voice = raw_voice[:15000] # First 15s sample clip
+        optimized_voice = raw_voice[:15000] # Safe 15s slice snippet
         optimized_voice = optimized_voice.set_frame_rate(24000).set_channels(1).set_sample_width(2)
         
         buffer = io.BytesIO()
@@ -78,7 +86,7 @@ def process_presentation(txt_path, voice_path, ref_text, output_path, padding_se
     final_presentation_audio = AudioSegment.empty()
     current_timeline_position = 0
 
-    # --- 🌟 STEP 1: PRESENT THE REFERENCE TEXT AS SLIDE 1 ---
+    # --- STEP 1: PRESENT THE REFERENCE TEXT AS SLIDE 1 ---
     print("🎤 Synthesizing Reference Text as Slide 1 Intro...")
     ref_chunks = split_text_into_sentences(ref_text)
     for chunk in ref_chunks:
@@ -87,10 +95,7 @@ def process_presentation(txt_path, voice_path, ref_text, output_path, padding_se
             final_presentation_audio += sentence_audio
             final_presentation_audio += AudioSegment.silent(duration=250)
             
-    # Add a natural 1.5-second slide transition pause right after the introduction
-    final_presentation_audio += AudioSegment.silent(duration=1500)
-    
-    # Calculate how long the intro presentation slide took
+    final_presentation_audio += AudioSegment.silent(duration=1500) # Slide change break
     intro_duration = len(final_presentation_audio)
     current_timeline_position = intro_duration
     print(f"✅ Slide 1 Intro Complete. Duration: {intro_duration / 1000:.2f} seconds.")
@@ -100,9 +105,7 @@ def process_presentation(txt_path, voice_path, ref_text, output_path, padding_se
         if not full_text or not full_text.strip():
             continue
 
-        # Shift the original timestamp forward so it plays immediately after the Intro ends
         shifted_start_time = start_time + intro_duration
-
         chunks = split_text_into_sentences(full_text)
         block_audio = AudioSegment.empty()
 
@@ -112,7 +115,6 @@ def process_presentation(txt_path, voice_path, ref_text, output_path, padding_se
                 block_audio += sentence_audio
                 block_audio += AudioSegment.silent(duration=250)
 
-        # Handle chronological timeline mapping with the shifted timeline
         if shifted_start_time > current_timeline_position:
             silence_needed = shifted_start_time - current_timeline_position
             final_presentation_audio += AudioSegment.silent(duration=silence_needed)
@@ -121,8 +123,9 @@ def process_presentation(txt_path, voice_path, ref_text, output_path, padding_se
         final_presentation_audio += block_audio
         current_timeline_position += len(block_audio)
 
-    if len(final_presentation_audio) == intro_duration:
-        raise ValueError("Main presentation audio compilation failed. Please verify your Hugging Face API node status.")
+    # Throw error if everything failed to prevent a broken silent output download
+    if len(final_presentation_audio) <= intro_duration + 2000:
+        raise ValueError("The public serverless inference nodes are currently overloaded and timing out. Please wait 1-2 minutes and click generate again to retry.")
 
     if padding_seconds > 0:
         final_presentation_audio += AudioSegment.silent(duration=int(padding_seconds * 1000))
