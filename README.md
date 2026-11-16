@@ -11,6 +11,10 @@ The architecture ingests raw reference voice recordings (`.wav` or live micropho
 **Own-Voice AI Cloning Presentation Studio** built with **Streamlit**, **F5-TTS zero-shot voice cloning**, **Groq Whisper auto-transcription**, and **pure-Python acoustic similarity verification**. Features **chunk-by-chunk disk streaming (< 150 MB RAM footprint)**, **local Google Colab T4 GPU acceleration**, **automatic Hugging Face Space discovery with zero-key regional fallback**, and **automated GitHub Actions CI/CD**.
 
 ---
+<img src="assets/desktop.png" width="100%">
+
+---
+---
 
 ### ⭐ Show Your Support
 
