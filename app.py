@@ -10,7 +10,7 @@ from src.audio_processor import (
     stitch_timeline_to_disk,
     compute_voice_similarity,
 )
-from src.tts_client import F5TTSClient
+from src.tts_client import F5TTSClient, synthesize_regional_neural
 from src.groq_helper import is_groq_available, transcribe_reference_wav, synthesize_preset_groq
 from src.audit_logger import log_generation_event
 
@@ -30,42 +30,53 @@ ACCENT_PROFILES = {
 }
 
 st.title("🎙️ Enterprise AI Voice Cloning Presentation Studio")
-st.caption("Memory-optimized chunk-by-chunk voice cloning and timeline stitching engine.")
+st.caption("Select your dedicated synthesis engine in the sidebar: Zero-Shot Voice Cloning, Groq Preset TTS, or Free Regional Neural TTS.")
 
 with st.sidebar:
-    st.header("⚙️ Execution Mode")
-    operation_mode = st.radio(
-        "Choose Architecture Mode:",
+    st.header("⚙️ Select Synthesis Option")
+    selected_mode = st.radio(
+        "Choose Exact Engine:",
         [
-            "Without API (Free Public Cloud + Regional Fallback)",
-            "With API (Enterprise Keys & Groq)",
+            "1. Zero-Shot Voice Cloning (F5-TTS)",
+            "2. Ultra-Fast Preset Voices (Groq API)",
+            "3. Free Regional Neural Voice (No API)",
         ],
     )
 
-    use_api_mode = operation_mode.startswith("With API")
     hf_token = None
+    custom_hf_space = ""
     groq_api_key = None
-    custom_hf_space = secret_custom_space
+    preset_voice = "Fritz-PlayAI"
 
-    if use_api_mode:
-        st.subheader("🔑 API Credentials & Endpoint")
+    if selected_mode.startswith("1."):
+        st.subheader("🔑 F5-TTS Space Configuration")
+        custom_hf_space = st.text_input(
+            "Hugging Face Space ID",
+            value=secret_custom_space,
+            placeholder="e.g., SRINIVASTA/f5-tts-cloner",
+            help="Enter your own Hugging Face Space ID for guaranteed cloning, or leave blank to scan public Spaces.",
+        )
         hf_token = st.text_input(
             "Hugging Face Token (Optional)",
             value=secret_hf_token,
             type="password",
-            help="Authenticates private F5-TTS Spaces and avoids public rate limits.",
-        )
-        custom_hf_space = st.text_input(
-            "Custom F5-TTS Space ID (Optional)",
-            value=secret_custom_space,
-            placeholder="e.g., SRINIVASTA/E2-F5-TTS",
-            help="Point directly to your own duplicated Hugging Face Space for guaranteed zero-shot voice cloning.",
         )
         groq_api_key = st.text_input(
-            "Groq API Key (Optional)",
+            "Groq Key for Auto-Transcribe (Optional)",
             value=secret_groq_key,
             type="password",
-            help="Unlocks Whisper auto-transcription and instant preset voices.",
+        )
+
+    elif selected_mode.startswith("2."):
+        st.subheader("🔑 Groq API Configuration")
+        groq_api_key = st.text_input(
+            "Groq API Key (Required)",
+            value=secret_groq_key,
+            type="password",
+        )
+        preset_voice = st.selectbox(
+            "Select Groq Preset Voice",
+            ["Fritz-PlayAI", "Arista-PlayAI", "Atlas-PlayAI", "Celeste-PlayAI", "Mason-PlayAI"],
         )
 
     st.divider()
@@ -77,26 +88,15 @@ with st.sidebar:
     )
     speech_speed = ACCENT_PROFILES[selected_accent]
 
-    groq_enabled = use_api_mode and is_groq_available(groq_api_key)
-
-    engine_choice = "Zero-Shot Voice Cloning (F5-TTS)"
-    preset_voice = "Fritz-PlayAI"
-    if groq_enabled:
-        st.divider()
-        engine_choice = st.radio(
-            "Synthesis Engine",
-            ["Zero-Shot Voice Cloning (F5-TTS)", "Ultra-Fast Preset Voice (Groq)"],
-        )
-        if engine_choice == "Ultra-Fast Preset Voice (Groq)":
-            preset_voice = st.selectbox(
-                "Select Groq Preset Voice",
-                ["Fritz-PlayAI", "Arista-PlayAI", "Atlas-PlayAI", "Celeste-PlayAI", "Mason-PlayAI"],
-            )
+groq_enabled = is_groq_available(groq_api_key)
+is_cloning_mode = selected_mode.startswith("1.")
+is_groq_mode = selected_mode.startswith("2.")
+is_edge_mode = selected_mode.startswith("3.")
 
 col_left, col_right = st.columns([1.05, 0.95], gap="large")
 
 with col_left:
-    if engine_choice == "Zero-Shot Voice Cloning (F5-TTS)":
+    if is_cloning_mode:
         st.subheader("1. Reference Voice Sample (.wav)")
         input_method = st.radio("Audio Source", ["Upload .wav File", "Record Microphone"], horizontal=True)
 
@@ -127,6 +127,7 @@ with col_left:
                         st.error(f"Transcription failed: {exc}")
     else:
         voice_bytes = None
+        st.info(f"ℹ️ **{selected_mode}** does not require a reference `.wav` sample.")
 
     st.subheader("2. Presentation Script (.txt)")
     uploaded_script = st.file_uploader("Upload [MM:SS] timestamped script", type=["txt"])
@@ -145,26 +146,28 @@ with col_left:
             st.error(f"Script Format Error: {err}")
 
     ref_text = ""
-    if engine_choice == "Zero-Shot Voice Cloning (F5-TTS)":
+    if is_cloning_mode:
         ref_text = st.text_input(
             "Reference Transcript (Must match exact words spoken in the reference clip)",
             value=parsed_ref,
         )
 
-    consent_ok = st.checkbox("I confirm I own or have explicit authorization to synthesize this voice.")
+    consent_ok = st.checkbox("I confirm I own or have explicit authorization to generate this audio.")
     run_btn = st.button("🚀 Generate Chunk-by-Chunk & Combine", type="primary", use_container_width=True)
 with col_right:
     st.subheader("3. Live Chunk-by-Chunk & Combined Output")
-    st.info(f"**Active Profile:** {selected_accent} (Speed: `{speech_speed}x`)")
+    st.info(f"**Mode:** `{selected_mode}` | **Dialect:** {selected_accent}")
 
     if run_btn:
         active_voice_bytes = st.session_state.get("voice_bytes", None)
         if not consent_ok:
-            st.error("Please confirm voice authorization before generating.")
+            st.error("Please confirm authorization before generating.")
         elif not timeline_items:
             st.warning("Please upload a valid .txt script with [MM:SS] markers.")
-        elif engine_choice == "Zero-Shot Voice Cloning (F5-TTS)" and (not active_voice_bytes or not ref_text.strip()):
-            st.warning("Please provide both a reference .wav clip and its exact reference text.")
+        elif is_cloning_mode and (not active_voice_bytes or not ref_text.strip()):
+            st.warning("Option 1 requires both a reference .wav clip and its exact reference text.")
+        elif is_groq_mode and not groq_enabled:
+            st.error("Option 2 requires a valid Groq API Key (`gsk_...`) in the sidebar.")
         else:
             progress = st.progress(0, text="Preparing low-memory disk workspace...")
             chunk_feed = st.container()
@@ -174,25 +177,18 @@ with col_right:
             try:
                 with tempfile.TemporaryDirectory() as session_dir:
                     norm_ref_path = os.path.join(session_dir, "norm_ref.wav")
-                    if engine_choice == "Zero-Shot Voice Cloning (F5-TTS)":
+                    if is_cloning_mode:
                         normalize_reference_audio(active_voice_bytes, norm_ref_path, max_duration_ms=12000)
-                        tts_engine = F5TTSClient(
-                            use_api=True,
-                            hf_token=hf_token,
-                            custom_space=custom_hf_space,
-                            accent_label=selected_accent,
-                            allow_fallback=True,
-                        )
+                        tts_engine = F5TTSClient(hf_token=hf_token, custom_space=custom_hf_space)
 
                     stitched_inputs = []
                     total = len(timeline_items)
 
-                    # Process strictly ONE chunk at a time, flush to disk, and free RAM
                     for idx, (ts_ms, text_line) in enumerate(timeline_items):
                         progress.progress(idx / total, text=f"Generating chunk {idx + 1} of {total}...")
                         seg_path = os.path.join(session_dir, f"seg_{idx}.wav")
 
-                        if engine_choice == "Zero-Shot Voice Cloning (F5-TTS)":
+                        if is_cloning_mode:
                             tts_engine.clone_segment(
                                 norm_ref_path,
                                 ref_text.strip(),
@@ -200,8 +196,10 @@ with col_right:
                                 seg_path,
                                 speed=speech_speed,
                             )
-                        else:
+                        elif is_groq_mode:
                             synthesize_preset_groq(text_line, preset_voice, groq_api_key, seg_path)
+                        else:
+                            synthesize_regional_neural(text_line, selected_accent, seg_path)
 
                         with chunk_feed.expander(f"✅ Chunk {idx + 1}/{total}: {text_line[:55]}...", expanded=False):
                             with open(seg_path, "rb") as f_seg:
@@ -214,8 +212,7 @@ with col_right:
                     master_wav_path = os.path.join(session_dir, "master_presentation.wav")
                     stitch_timeline_to_disk(stitched_inputs, master_wav_path)
 
-                    # Compute acoustic voice similarity before deleting temp workspace
-                    if engine_choice == "Zero-Shot Voice Cloning (F5-TTS)" and os.path.exists(norm_ref_path):
+                    if is_cloning_mode and os.path.exists(norm_ref_path):
                         progress.progress(0.97, text="Verifying acoustic speaker similarity...")
                         similarity_score = compute_voice_similarity(norm_ref_path, master_wav_path)
 
@@ -225,41 +222,26 @@ with col_right:
                     progress.progress(1.0, text="Complete!")
                     gc.collect()
 
-                used_fallback = bool(tts_engine and getattr(tts_engine, "_fallback_triggered", False))
-                active_space_used = getattr(tts_engine, "_active_space", None)
-                last_err = getattr(tts_engine, "last_space_error", "")
-
-                engine_summary = (
-                    f"{engine_choice} (Regional Neural Fallback)"
-                    if used_fallback
-                    else f"{engine_choice} ({active_space_used})"
-                )
-
+                active_space_used = getattr(tts_engine, "_active_space", "Hugging Face F5-TTS")
                 log_generation_event(
                     active_user,
-                    f"{operation_mode} | {selected_accent} | {engine_summary}",
+                    f"{selected_mode} | {selected_accent}",
                     len(timeline_items),
                     "SUCCESS",
                 )
 
-                if used_fallback:
-                    st.warning(
-                        f"F5-TTS GPU Spaces were unavailable ({last_err or 'offline'}), so your presentation used **{selected_accent}** neural speech."
-                    )
-                else:
-                    st.success(f"All {total} chunks cloned via **{active_space_used}** and combined into your master presentation!")
+                st.success(f"All {total} chunks synthesized and combined!")
 
-                # Display Acoustic Voice Match Verification Metrics
-                if similarity_score is not None:
+                if is_cloning_mode and similarity_score is not None:
                     m1, m2 = st.columns(2)
                     m1.metric(
                         label="🎯 Acoustic Voice Match",
                         value=f"{similarity_score}%",
-                        delta="Zero-Shot Cloned" if not used_fallback else "Regional Neural Voice",
+                        delta="Verified Zero-Shot Clone",
                     )
                     m2.metric(
-                        label="🔊 Active Synthesis Engine",
-                        value=f"F5-TTS ({active_space_used})" if not used_fallback else "Edge Regional TTS",
+                        label="🔊 Cloned Via Space",
+                        value=str(active_space_used),
                     )
 
                 st.audio(final_wav_bytes, format="audio/wav")
@@ -272,5 +254,5 @@ with col_right:
                 )
             except Exception as exc:
                 gc.collect()
-                log_generation_event(active_user, operation_mode, len(timeline_items), "FAILED", str(exc))
+                log_generation_event(active_user, selected_mode, len(timeline_items), "FAILED", str(exc))
                 st.error(f"Synthesis failed: {exc}")
