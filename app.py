@@ -18,10 +18,9 @@ st.set_page_config(page_title="Own-Voice AI Presentation Studio", page_icon="�
 
 active_user = enforce_enterprise_auth()
 
-# Securely read secrets on the backend without exposing keys in the browser
+# Read secrets securely on the backend without exposing keys in the browser
 secret_hf_token = str(st.secrets.get("HF_TOKEN", "")).strip()
 secret_groq_key = str(st.secrets.get("GROQ_API_KEY", "")).strip()
-secret_custom_space = str(st.secrets.get("CUSTOM_HF_SPACE", "")).strip()
 
 ACCENT_PROFILES = {
     "🇮🇳 India (English) — Natural Cadence": 0.90,
@@ -32,24 +31,23 @@ ACCENT_PROFILES = {
 }
 
 st.title("🎙️ Own-Voice AI Cloning Presentation Studio")
-st.caption("Zero-shot acoustic voice cloning — trains on your own voice sample to narrate your entire presentation.")
+st.caption("Zero-shot acoustic voice cloning — trains on your own voice sample, verifies acoustic match, and exports your master WAV.")
 
 with st.sidebar:
     st.header("⚙️ Voice Cloning Engine")
     cloning_mode = st.radio(
         "Compute Backend:",
         [
-            "With API (Your HF Space + Auto-Transcribe)",
+            "With API (Vault Keys + Auto-Transcribe)",
             "Without API (Free Public HF Spaces)",
         ],
     )
 
     use_api_secrets = cloning_mode.startswith("With API")
-    hf_token = secret_hf_token if use_api_secrets else ""
-    groq_api_key = secret_groq_key if use_api_secrets else ""
-    custom_hf_space = secret_custom_space
 
     if use_api_secrets:
+        hf_token = secret_hf_token
+        groq_api_key = secret_groq_key
         st.divider()
         st.subheader("🔒 Vault Status")
         if secret_hf_token:
@@ -61,11 +59,16 @@ with st.sidebar:
             st.success("GROQ_API_KEY: Active (Auto-Transcribe)")
 
         custom_hf_space = st.text_input(
-            "Your F5-TTS Space ID",
-            value=secret_custom_space,
-            placeholder="SRINIVASTA/f5-tts-cloner",
-            help="Enter your own Hugging Face Space ID or leave blank to auto-scan live F5-TTS Spaces.",
+            "Custom HF Space ID (Optional)",
+            value="",
+            placeholder="Leave blank to auto-scan live Spaces",
+            help="Optional: Enter a verified Space ID (e.g., username/space-name) or leave blank to auto-discover running F5-TTS Spaces.",
         )
+    else:
+        hf_token = ""
+        groq_api_key = ""
+        custom_hf_space = ""
+        st.info("🌐 Running in **Zero-Key Public Mode** (auto-scanning live public F5-TTS Spaces).")
 
     st.divider()
     st.subheader("🌍 Speaking Cadence")
@@ -76,7 +79,7 @@ with st.sidebar:
     )
     speech_speed = ACCENT_PROFILES[selected_accent]
 
-groq_enabled = is_groq_available(groq_api_key)
+groq_enabled = use_api_secrets and is_groq_available(groq_api_key)
 
 col_left, col_right = st.columns([1.05, 0.95], gap="large")
 
@@ -137,7 +140,7 @@ with col_left:
     consent_ok = st.checkbox("I confirm this is my own voice or I hold explicit consent to clone it.")
     run_btn = st.button("🚀 Clone My Voice & Generate Presentation", type="primary", use_container_width=True)
 with col_right:
-    st.subheader("3. Cloned Voice Output (Chunk-by-Chunk & Master)")
+    st.subheader("3. Verify Voice Match & Download Master (.wav)")
     st.info(f"**Target Engine:** Zero-Shot F5-TTS Voice Clone | **Cadence:** {selected_accent}")
 
     if run_btn:
@@ -151,8 +154,6 @@ with col_right:
         else:
             progress = st.progress(0, text="Preparing isolated voice cloning workspace...")
             chunk_feed = st.container()
-            tts_engine = None
-            similarity_score = None
 
             try:
                 with tempfile.TemporaryDirectory() as session_dir:
@@ -197,36 +198,48 @@ with col_right:
                     gc.collect()
 
                 active_space_used = getattr(tts_engine, "_active_space", "Hugging Face F5-TTS")
+
+                # Store verified master output in session state so download button persists across reruns
+                st.session_state["master_result"] = {
+                    "wav_bytes": final_wav_bytes,
+                    "similarity": similarity_score,
+                    "space_used": str(active_space_used),
+                    "total_chunks": total,
+                }
+
                 log_generation_event(
                     active_user,
                     f"F5-TTS Clone ({active_space_used}) | {selected_accent}",
                     len(timeline_items),
                     "SUCCESS",
                 )
-
-                st.success(f"All {total} chunks cloned in your own voice and combined!")
-
-                if similarity_score is not None:
-                    m1, m2 = st.columns(2)
-                    m1.metric(
-                        label="🎯 Acoustic Voice Match",
-                        value=f"{similarity_score}%",
-                        delta="Cloned From Your Sample",
-                    )
-                    m2.metric(
-                        label="🔊 Cloned Via Space",
-                        value=str(active_space_used),
-                    )
-
-                st.audio(final_wav_bytes, format="audio/wav")
-                st.download_button(
-                    label="⬇️ Download My Cloned Presentation (.wav)",
-                    data=final_wav_bytes,
-                    file_name="my_cloned_presentation_master.wav",
-                    mime="audio/wav",
-                    use_container_width=True,
-                )
             except Exception as exc:
                 gc.collect()
                 log_generation_event(active_user, "F5-TTS Clone", len(timeline_items), "FAILED", str(exc))
                 st.error(f"Voice cloning failed: {exc}")
+
+    # Render verified master output & Option 1 Download for Google Drive upload
+    master_result = st.session_state.get("master_result", None)
+    if master_result:
+        st.success(f"All {master_result['total_chunks']} chunks cloned in your own voice and combined!")
+
+        m1, m2 = st.columns(2)
+        m1.metric(
+            label="🎯 Acoustic Voice Match",
+            value=f"{master_result['similarity']}%",
+            delta="Ready to Save" if master_result["similarity"] >= 70 else "Review Audio Before Saving",
+        )
+        m2.metric(
+            label="🔊 Cloned Via Space",
+            value=master_result["space_used"],
+        )
+
+        st.audio(master_result["wav_bytes"], format="audio/wav")
+        st.download_button(
+            label="⬇️ Download Approved Presentation (.wav) to Save in Google Drive",
+            data=master_result["wav_bytes"],
+            file_name="my_cloned_presentation_master.wav",
+            mime="audio/wav",
+            use_container_width=True,
+        )
+        st.caption("💡 Step 1: Listen & verify your Acoustic Voice Match score above. Step 2: Download the .wav and upload it to your Google Drive.")
