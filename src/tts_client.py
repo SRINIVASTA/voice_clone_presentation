@@ -10,16 +10,17 @@ from gradio_client import Client, handle_file
 from huggingface_hub import HfApi
 
 SEED_SPACES = [
+    "SRINIVASTA/f5-tts-cloner",
     "mrfakename/E2-F5-TTS",
     "mrfakename/F5-TTS",
 ]
 
 EDGE_VOICE_MAP = {
-    "🇮🇳 India (English) — Clear Cadence": "en-IN-PrabhatNeural",
+    "🇮🇳 India (English) — Natural Cadence": "en-IN-PrabhatNeural",
     "🇺🇸 United States (English) — Standard": "en-US-AndrewNeural",
     "🇬🇧 United Kingdom (English) — Crisp": "en-GB-RyanNeural",
     "🇦🇺 Australia (English) — Natural": "en-AU-WilliamNeural",
-    "🌐 Neutral / Slower Presentation Pace": "en-IN-NeerjaNeural",
+    "🌐 Slower / Clear Presentation Pace": "en-IN-NeerjaNeural",
 }
 
 REQUEST_TIMEOUT_SECONDS = 60
@@ -40,11 +41,11 @@ def _discover_running_f5_spaces(hf_token: Optional[str] = None) -> List[str]:
     except Exception:
         pass
 
-    combined = []
-    for s in discovered + SEED_SPACES:
+    combined: List[str] = []
+    for s in SEED_SPACES + discovered:
         if s and s not in combined:
             combined.append(s)
-    return combined[:6]
+    return combined[:8]
 
 
 def _extract_audio_path(result) -> Optional[str]:
@@ -64,8 +65,8 @@ def _extract_audio_path(result) -> Optional[str]:
     return None
 
 
-def synthesize_regional_neural(gen_text: str, accent_label: str, dest_wav_path: str) -> str:
-    """Dedicated Option 3: Zero-key regional neural TTS with 3x retry resilience."""
+def _synthesize_edge_fallback(gen_text: str, accent_label: str, dest_wav_path: str) -> str:
+    """Zero-key regional neural TTS fallback so Without-API mode always generates audio."""
     import edge_tts
     from pydub import AudioSegment
 
@@ -96,22 +97,34 @@ def synthesize_regional_neural(gen_text: str, accent_label: str, dest_wav_path: 
             if os.path.exists(temp_mp3):
                 os.remove(temp_mp3)
 
-    raise RuntimeError(f"Regional neural TTS failed after 3 retries: {last_err}")
+    raise RuntimeError(f"Zero-key neural TTS failed after 3 retries: {last_err}")
 
 
 class F5TTSClient:
-    """Dedicated Option 1: Strict zero-shot voice cloning via F5-TTS Spaces."""
+    """F5-TTS voice cloning client with automatic zero-key regional neural fallback."""
 
-    def __init__(self, hf_token: Optional[str] = None, custom_space: Optional[str] = None):
+    def __init__(
+        self,
+        hf_token: Optional[str] = None,
+        custom_space: Optional[str] = None,
+        accent_label: str = "🇮🇳 India (English) — Natural Cadence",
+        allow_fallback: bool = True,
+    ):
         self.hf_token = hf_token.strip() if (hf_token and hf_token.strip()) else None
+        self.accent_label = accent_label
+        self.allow_fallback = allow_fallback
         clean_custom = custom_space.strip() if (custom_space and custom_space.strip()) else None
+        if clean_custom and "/" not in clean_custom:
+            clean_custom = f"SRINIVASTA/{clean_custom}"
+
         if clean_custom:
-            # If user specifies their own Space (e.g. SRINIVASTA/f5-tts-cloner), target ONLY that Space
             self.spaces = [clean_custom]
         else:
             self.spaces = _discover_running_f5_spaces(self.hf_token)
+
         self._active_client: Optional[Client] = None
         self._active_space: Optional[str] = None
+        self._fallback_triggered: bool = False
 
     def _connect_with_timeout(self, space_id: str) -> Client:
         def _init_client():
@@ -189,6 +202,9 @@ class F5TTSClient:
         dest_wav_path: str,
         speed: float = 0.92,
     ) -> str:
+        if self._fallback_triggered:
+            return _synthesize_edge_fallback(gen_text, self.accent_label, dest_wav_path)
+
         last_error = None
         ordered_spaces = (
             [self._active_space] + [s for s in self.spaces if s != self._active_space]
@@ -214,8 +230,9 @@ class F5TTSClient:
                 self._active_client = None
                 time.sleep(0.5)
 
-        raise RuntimeError(
-            f"Voice Cloning Space unavailable ({last_error}). "
-            "Create your free Space 'SRINIVASTA/f5-tts-cloner' on Hugging Face and enter its ID in the sidebar, "
-            "or select Option 2 (Groq Preset Voice) / Option 3 (Free Regional Neural Voice)."
-        )
+        if self.allow_fallback:
+            self._fallback_triggered = True
+            self._active_space = "Edge Regional Neural TTS (Zero-Key)"
+            return _synthesize_edge_fallback(gen_text, self.accent_label, dest_wav_path)
+
+        raise RuntimeError(f"Voice Cloning Space unavailable ({last_error}).")
