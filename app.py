@@ -32,7 +32,7 @@ with st.sidebar:
     operation_mode = st.radio(
         "Choose Architecture Mode:",
         [
-            "Without API (Free Public Cloud Spaces)",
+            "Without API (Free Public Cloud + Regional Fallback)",
             "With API (Enterprise Keys & Groq)",
         ],
     )
@@ -157,13 +157,19 @@ with col_right:
         else:
             progress = st.progress(0, text="Preparing low-memory disk workspace...")
             chunk_feed = st.container()
+            tts_engine = None
 
             try:
                 with tempfile.TemporaryDirectory() as session_dir:
                     norm_ref_path = os.path.join(session_dir, "norm_ref.wav")
                     if engine_choice == "Zero-Shot Voice Cloning (F5-TTS)":
                         normalize_reference_audio(active_voice_bytes, norm_ref_path, max_duration_ms=12000)
-                        tts_engine = F5TTSClient(use_api=True, hf_token=hf_token)
+                        tts_engine = F5TTSClient(
+                            use_api=True,
+                            hf_token=hf_token,
+                            accent_label=selected_accent,
+                            allow_fallback=True,
+                        )
 
                     stitched_inputs = []
                     total = len(timeline_items)
@@ -202,13 +208,27 @@ with col_right:
                     progress.progress(1.0, text="Complete!")
                     gc.collect()
 
+                used_fallback = bool(tts_engine and getattr(tts_engine, "_fallback_triggered", False))
+                engine_summary = (
+                    f"{engine_choice} (Regional Neural Fallback)"
+                    if used_fallback
+                    else engine_choice
+                )
+
                 log_generation_event(
                     active_user,
-                    f"{operation_mode} | {selected_accent} | {engine_choice}",
+                    f"{operation_mode} | {selected_accent} | {engine_summary}",
                     len(timeline_items),
                     "SUCCESS",
                 )
-                st.success(f"All {total} chunks combined into your master presentation!")
+
+                if used_fallback:
+                    st.warning(
+                        f"Public F5-TTS GPU Spaces are currently offline, so your presentation was automatically synthesized using **{selected_accent}** neural speech."
+                    )
+                else:
+                    st.success(f"All {total} cloned chunks combined into your master presentation!")
+
                 st.audio(final_wav_bytes, format="audio/wav")
                 st.download_button(
                     label="⬇️ Download Combined Master Presentation (.wav)",
