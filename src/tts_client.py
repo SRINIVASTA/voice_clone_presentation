@@ -23,16 +23,16 @@ EDGE_VOICE_MAP = {
     "🌐 Neutral / Slower Presentation Pace": "en-IN-NeerjaNeural",
 }
 
-REQUEST_TIMEOUT_SECONDS = 30
+REQUEST_TIMEOUT_SECONDS = 40
 
 
-@st.cache_data(ttl=300, show_spinner=False)
+@st.cache_data(ttl=180, show_spinner=False)
 def _discover_running_f5_spaces(hf_token: Optional[str] = None) -> List[str]:
     """Queries Hugging Face Hub API in real time for F5-TTS Spaces currently in RUNNING state."""
     discovered: List[str] = []
     try:
         api = HfApi(token=hf_token if hf_token else None)
-        spaces = api.list_spaces(search="F5-TTS", sort="likes", direction=-1, limit=15)
+        spaces = api.list_spaces(search="F5-TTS", sort="likes", direction=-1, limit=20)
         for sp in spaces:
             runtime = getattr(sp, "runtime", None)
             stage = getattr(runtime, "stage", "") if runtime else ""
@@ -82,7 +82,6 @@ def _synthesize_edge_fallback(gen_text: str, accent_label: str, dest_wav_path: s
     for attempt in range(3):
         voice_to_use = fallback_voices[attempt % len(fallback_voices)]
         try:
-            # Small pacing pause to avoid rapid-fire burst throttling on chunk 6+
             time.sleep(0.5 + (attempt * 1.0))
 
             async def _run():
@@ -105,7 +104,7 @@ def _synthesize_edge_fallback(gen_text: str, accent_label: str, dest_wav_path: s
 
 
 class F5TTSClient:
-    """Self-healing F5-TTS client with live Space discovery and zero-key regional neural fallback."""
+    """Self-healing F5-TTS client supporting custom private Spaces, live discovery, and regional fallback."""
 
     def __init__(
         self,
@@ -120,10 +119,12 @@ class F5TTSClient:
         self.accent_label = accent_label
         self.allow_fallback = allow_fallback
         live_spaces = _discover_running_f5_spaces(self.hf_token)
-        self.spaces = ([custom_space.strip()] if (custom_space and custom_space.strip()) else []) + live_spaces
+        clean_custom = custom_space.strip() if (custom_space and custom_space.strip()) else None
+        self.spaces = ([clean_custom] if clean_custom else []) + [s for s in live_spaces if s != clean_custom]
         self._active_client: Optional[Client] = None
         self._active_space: Optional[str] = None
         self._fallback_triggered = False
+        self.last_space_error: str = ""
 
     def clone_segment(
         self,
@@ -143,7 +144,7 @@ class F5TTSClient:
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
             future = pool.submit(_init_client)
-            return future.result(timeout=15)
+            return future.result(timeout=20)
 
     def _predict_schema_aware(
         self,
@@ -238,6 +239,7 @@ class F5TTSClient:
                 self._active_client = None
                 time.sleep(0.5)
 
+        self.last_space_error = str(last_error)
         if self.allow_fallback:
             self._fallback_triggered = True
             return _synthesize_edge_fallback(gen_text, self.accent_label, dest_wav_path)
