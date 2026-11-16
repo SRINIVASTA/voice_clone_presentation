@@ -7,7 +7,6 @@ import scipy.io.wavfile as wavfile
 import streamlit as st
 from gradio_client import Client, handle_file
 
-# Verified active Hugging Face Spaces running F5-TTS
 FALLBACK_SPACES = [
     "mrfakename/E2-F5-TTS",
     "abidlabs/E2-F5-TTS",
@@ -20,8 +19,25 @@ def _load_local_f5_model():
     return F5TTS()
 
 
+def _extract_audio_path(result) -> Optional[str]:
+    """Recursively extracts the first existing .wav/.audio file path from Gradio output."""
+    if isinstance(result, str) and os.path.exists(result):
+        return result
+    if isinstance(result, dict):
+        for key in ("path", "url", "name"):
+            val = result.get(key)
+            if isinstance(val, str) and os.path.exists(val):
+                return val
+    if isinstance(result, (list, tuple)):
+        for item in result:
+            found = _extract_audio_path(item)
+            if found:
+                return found
+    return None
+
+
 class F5TTSClient:
-    """Supports both Local No-API F5-TTS and Remote API F5-TTS with failover."""
+    """Supports both Local No-API F5-TTS and Remote API F5-TTS with dynamic endpoint discovery."""
 
     def __init__(self, use_api: bool = True, hf_token: Optional[str] = None, custom_space: Optional[str] = None):
         self.use_api = use_api
@@ -44,29 +60,59 @@ class F5TTSClient:
         wavfile.write(dest_wav_path, sr, (wav * 32767).astype(np.int16))
         return dest_wav_path
 
+    def _predict_dynamic(self, client: Client, ref_wav_path: str, ref_text: str, gen_text: str):
+        """Auto-detects the active TTS endpoint name and parameter structure on the Space."""
+        api_info = client.view_api(return_format="dict")
+        named_endpoints = api_info.get("named_endpoints", {})
+
+        # Look for common F5-TTS endpoint names in priority order
+        candidate_names = ["/basic_tts", "/infer", "/predict", "/generate", "/tts"]
+        chosen_api = next((name for name in candidate_names if name in named_endpoints), None)
+
+        if not chosen_api and named_endpoints:
+            # Pick the first endpoint that accepts at least 3 parameters (ref_audio, ref_text, gen_text)
+            for ep_name, ep_meta in named_endpoints.items():
+                if len(ep_meta.get("parameters", [])) >= 3:
+                    chosen_api = ep_name
+                    break
+
+        audio_input = handle_file(ref_wav_path)
+
+        # Try positional call on chosen named endpoint first (most resilient to parameter renaming)
+        if chosen_api:
+            try:
+                return client.predict(
+                    audio_input,
+                    ref_text,
+                    gen_text,
+                    False,
+                    0.15,
+                    1.0,
+                    api_name=chosen_api,
+                )
+            except TypeError:
+                return client.predict(
+                    audio_input,
+                    ref_text,
+                    gen_text,
+                    api_name=chosen_api,
+                )
+
+        # Fallback to unnamed fn_index=0
+        try:
+            return client.predict(audio_input, ref_text, gen_text, False, 0.15, 1.0, fn_index=0)
+        except TypeError:
+            return client.predict(audio_input, ref_text, gen_text, fn_index=0)
+
     def _clone_via_api(self, ref_wav_path: str, ref_text: str, gen_text: str, dest_wav_path: str) -> str:
-        """Runs via Hugging Face Gradio API (works with or without HF_TOKEN)."""
+        """Runs via Hugging Face Gradio API with automatic endpoint discovery and failover."""
         last_error = None
         for space_id in self.spaces:
             for attempt in range(3):
                 try:
-                    # Only pass token if an actual HF_TOKEN string exists
-                    if self.hf_token:
-                        client = Client(space_id, token=self.hf_token)
-                    else:
-                        client = Client(space_id)
-
-                    result = client.predict(
-                        ref_audio_input=handle_file(ref_wav_path),
-                        ref_text_input=ref_text,
-                        gen_text_input=gen_text,
-                        remove_silence=False,
-                        cross_fade_duration_slider=0.15,
-                        speed_slider=1.0,
-                        api_name="/basic_tts",
-                    )
-                    # /basic_tts returns (wav_filepath, spectrogram_filepath, ref_text)
-                    generated_path = result[0] if isinstance(result, (list, tuple)) else result
+                    client = Client(space_id, token=self.hf_token) if self.hf_token else Client(space_id)
+                    result = self._predict_dynamic(client, ref_wav_path, ref_text, gen_text)
+                    generated_path = _extract_audio_path(result)
                     if generated_path and os.path.exists(generated_path):
                         shutil.copyfile(generated_path, dest_wav_path)
                         return dest_wav_path
