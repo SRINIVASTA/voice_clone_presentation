@@ -1,122 +1,143 @@
-# --- CRUCIAL PYTHON 3.14 PYDUB IMPORT PATCH ---
-import sys
-try:
-    import audioop
-    sys.modules['pyaudioop'] = audioop
-except ImportError:
-    pass
-# -----------------------------------------------
-
-import streamlit as st
 import os
-import re
-from utils import process_presentation
+import tempfile
+import streamlit as st
 
-st.set_page_config(page_title="AI Presentation Sync", page_icon="🎤", layout="centered")
+from src.auth import enforce_enterprise_auth
+from src.parser import parse_presentation_script
+from src.audio_processor import normalize_reference_audio, stitch_timeline_segments
+from src.tts_client import F5TTSClient
+from src.groq_helper import is_groq_available, transcribe_reference_wav, synthesize_preset_groq
+from src.audit_logger import log_generation_event
 
-st.title("🎤 Perfect-Timed AI Presentation Generator")
-st.write("Upload your assets to generate a perfectly synced audio timeline.")
+st.set_page_config(page_title="Enterprise Voice Presentation Studio", page_icon="🎙️", layout="wide")
 
-# Initialize state trackers
-if "generation_id" not in st.session_state:
-    st.session_state.generation_id = 0
-if "auto_ref_text" not in st.session_state:
-    st.session_state.auto_ref_text = "This is a recording of my own voice to train the AI model in Kolab"
+active_user = enforce_enterprise_auth()
+hf_token = st.secrets.get("HF_TOKEN", None)
+groq_api_key = st.secrets.get("GROQ_API_KEY", None)
+groq_enabled = is_groq_available(groq_api_key)
 
-# 1. Presentation Text File Uploader
-uploaded_txt = st.file_uploader("Upload Presentation Timestamps (.txt)", type=["txt"])
+st.title("🎙️ Enterprise AI Voice Cloning Presentation Studio")
+st.caption("Zero-shot voice cloning and timestamp-synchronized presentation audio engine.")
 
-# 🌟 AUTOMATIC EXTRACTION ENGINE FOR THE REFERENCE TEXT BOX
-if uploaded_txt is not None:
-    try:
-        # Read the uploaded file bytes safely
-        bytes_data = uploaded_txt.getvalue()
-        file_content = bytes_data.decode("utf-8")
-        
-        # Split text by the first timestamp bracket to get the initial slide paragraph
-        segments = re.split(r'\[\d{2}:\d{2}\]', file_content)
-        
-        # Extract the very first non-empty text content segment block
-        for seg in segments:
-            cleaned_seg = seg.strip()
-            if cleaned_seg:
-                # Dynamically push the slide script into our session input memory pipeline
-                st.session_state.auto_ref_text = cleaned_seg
-                break
-    except Exception as e:
-        pass
-
-# 2. Render Remaining Input Elements
-uploaded_voice = st.file_uploader("Upload Your Reference Voice Clone (.wav)", type=["wav"])
-
-# The box now references our live dynamic listener tracking memory state!
-ref_text = st.text_input(
-    "Reference Text (Automatically synced from your uploaded file script)", 
-    value=st.session_state.auto_ref_text
-)
-
-# 3. Variable Settings Section
 with st.sidebar:
-    st.header("⚙️ App Settings")
-    padding_time = st.number_input(
-        "End padding (seconds)", 
-        min_value=0.0, 
-        max_value=10.0, 
-        value=2.0, 
-        step=0.5,
-        help="Adds a silent buffer at the end of your presentation to prevent abrupt cutoffs."
-    )
-    user_hf_token = st.text_input(
-        "Hugging Face Token (Optional)", 
-        type="password", 
-        help="Paste a personal token here if public shared channels are busy."
-    )
+    st.header("⚙️ Engine Configuration")
+    if groq_enabled:
+        st.success("Groq Acceleration: **Active** (Auto-Transcribe + Preset TTS)")
+        engine_choice = st.radio(
+            "Synthesis Mode",
+            ["Zero-Shot Voice Cloning (F5-TTS)", "Ultra-Fast Preset Voice (Groq)"],
+        )
+    else:
+        st.info("Running in **Pure F5-TTS Mode** (No Groq key required)")
+        engine_choice = "Zero-Shot Voice Cloning (F5-TTS)"
 
-# 4. Compile Sequence Activation
-if uploaded_txt and uploaded_voice and ref_text:
-    if st.button("🚀 Generate Presentation Audio", type="primary"):
-        st.session_state.generation_id += 1
-        
-        with st.spinner("Processing timeline and stitching audio clips via Cloud API..."):
+    preset_voice = "Fritz-PlayAI"
+    if engine_choice == "Ultra-Fast Preset Voice (Groq)":
+        preset_voice = st.selectbox(
+            "Select Groq Preset Voice",
+            ["Fritz-PlayAI", "Arista-PlayAI", "Atlas-PlayAI", "Celeste-PlayAI", "Mason-PlayAI"],
+        )
+
+col_left, col_right = st.columns([1.1, 0.9], gap="large")
+
+with col_left:
+    voice_bytes = None
+    if engine_choice == "Zero-Shot Voice Cloning (F5-TTS)":
+        st.subheader("1. Reference Voice Sample (.wav)")
+        input_method = st.radio("Audio Source", ["Upload .wav File", "Record Microphone"], horizontal=True)
+
+        if input_method == "Upload .wav File":
+            uploaded_wav = st.file_uploader("Upload clean 5–10 second speaker clip", type=["wav"])
+            if uploaded_wav:
+                voice_bytes = uploaded_wav.read()
+                st.audio(voice_bytes, format="audio/wav")
+        else:
+            mic_audio = st.audio_input("Record 5–10 seconds of clear speech")
+            if mic_audio:
+                voice_bytes = mic_audio.read()
+
+        if groq_enabled and voice_bytes:
+            if st.button("✨ Auto-Transcribe Reference Audio (Groq Whisper)"):
+                with st.spinner("Transcribing reference voice..."):
+                    try:
+                        auto_transcript = transcribe_reference_wav(voice_bytes, groq_api_key)
+                        st.session_state["auto_ref_text"] = auto_transcript
+                        st.success("Transcript extracted!")
+                    except Exception as exc:
+                        st.error(f"Transcription failed: {exc}")
+
+    st.subheader("2. Presentation Script (.txt)")
+    uploaded_script = st.file_uploader("Upload [MM:SS] timestamped script", type=["txt"])
+
+    parsed_ref = st.session_state.get("auto_ref_text", "")
+    timeline_items = []
+
+    if uploaded_script:
+        raw_script_text = uploaded_script.read().decode("utf-8")
+        try:
+            script_ref, timeline_items = parse_presentation_script(raw_script_text)
+            if not parsed_ref:
+                parsed_ref = script_ref
+            st.success(f"Validated {len(timeline_items)} timestamped segments.")
+        except ValueError as err:
+            st.error(f"Script Format Error: {err}")
+
+    ref_text = ""
+    if engine_choice == "Zero-Shot Voice Cloning (F5-TTS)":
+        ref_text = st.text_input(
+            "Reference Transcript (Must match exact words spoken in the reference clip)",
+            value=parsed_ref,
+        )
+
+    consent_ok = st.checkbox("I confirm I own or have explicit authorization to synthesize this voice.")
+    run_btn = st.button("🚀 Generate Presentation Audio", type="primary", use_container_width=True)
+
+with col_right:
+    st.subheader("3. Master Timeline Output")
+    if run_btn:
+        if not consent_ok:
+            st.error("Please confirm voice authorization before generating.")
+        elif not timeline_items:
+            st.warning("Please upload a valid .txt script with [MM:SS] markers.")
+        elif engine_choice == "Zero-Shot Voice Cloning (F5-TTS)" and (not voice_bytes or not ref_text.strip()):
+            st.warning("Please provide both a reference .wav clip and its exact reference text.")
+        else:
+            progress = st.progress(0, text="Initializing isolated session workspace...")
             try:
-                # Save input contents down to localized temporary cloud folders
-                with open("temp_presentation.txt", "wb") as f:
-                    f.write(uploaded_txt.getbuffer())
-                with open("temp_voice.wav", "wb") as f:
-                    f.write(uploaded_voice.getbuffer())
-                
-                output_path = "perfect_timed_presentation.wav"
-                
-                # Forward arguments directly to our utils timeline engine
-                process_presentation(
-                    "temp_presentation.txt", 
-                    "temp_voice.wav", 
-                    ref_text, 
-                    output_path, 
-                    padding_time if padding_time is not None else 0.0,
-                    token=user_hf_token if user_hf_token else None
+                with tempfile.TemporaryDirectory() as session_dir:
+                    norm_ref_path = os.path.join(session_dir, "norm_ref.wav")
+                    if engine_choice == "Zero-Shot Voice Cloning (F5-TTS)":
+                        normalize_reference_audio(voice_bytes, norm_ref_path)
+                        tts_engine = F5TTSClient(hf_token=hf_token)
+
+                    stitched_inputs = []
+                    total = len(timeline_items)
+
+                    for idx, (ts_ms, text_line) in enumerate(timeline_items):
+                        progress.progress(idx / total, text=f"Synthesizing segment {idx + 1} of {total}...")
+                        seg_path = os.path.join(session_dir, f"seg_{idx}.wav")
+
+                        if engine_choice == "Zero-Shot Voice Cloning (F5-TTS)":
+                            tts_engine.clone_segment(norm_ref_path, ref_text.strip(), text_line, seg_path)
+                        else:
+                            synthesize_preset_groq(text_line, preset_voice, groq_api_key, seg_path)
+
+                        stitched_inputs.append((ts_ms, seg_path))
+
+                    progress.progress(0.95, text="Stitching master presentation timeline...")
+                    final_wav = stitch_timeline_segments(stitched_inputs)
+                    progress.progress(1.0, text="Complete!")
+
+                log_generation_event(active_user, engine_choice, len(timeline_items), "SUCCESS")
+                st.success("Master presentation audio generated!")
+                st.audio(final_wav, format="audio/wav")
+                st.download_button(
+                    label="⬇️ Download Master Presentation (.wav)",
+                    data=final_wav,
+                    file_name="enterprise_presentation_master.wav",
+                    mime="audio/wav",
+                    use_container_width=True,
                 )
-                
-                st.success("🎉 Audio successfully compiled via cloud synthesis!")
-                
-                with open(output_path, "rb") as audio_file:
-                    st.audio(audio_file.read(), format="audio/wav")
-                
-                with open(output_path, "rb") as file:
-                    st.download_button(
-                        label="💾 Download Presentation WAV",
-                        data=file,
-                        file_name="perfect_timed_presentation.wav",
-                        mime="audio/wav",
-                        key=f"download_btn_v_{st.session_state.generation_id}"
-                    )
-            except ValueError as ve:
-                st.warning(f"⚠️ API Limit or Format Warning: {ve}")
-            except Exception as e:
-                st.error(f"❌ An error occurred during generation: {e}")
-            finally:
-                for tmp_file in ["temp_presentation.txt", "temp_voice.wav"]:
-                    if os.path.exists(tmp_file):
-                        os.remove(tmp_file)
-else:
-    st.info("💡 Please upload both your presentation text file and reference voice track to begin.")
+            except Exception as exc:
+                log_generation_event(active_user, engine_choice, len(timeline_items), "FAILED", str(exc))
+                st.error(f"Synthesis failed: {exc}")
