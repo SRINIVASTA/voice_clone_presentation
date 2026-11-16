@@ -5,7 +5,11 @@ import streamlit as st
 
 from src.auth import enforce_enterprise_auth
 from src.parser import parse_presentation_script
-from src.audio_processor import normalize_reference_audio, stitch_timeline_to_disk
+from src.audio_processor import (
+    normalize_reference_audio,
+    stitch_timeline_to_disk,
+    compute_voice_similarity,
+)
 from src.tts_client import F5TTSClient
 from src.groq_helper import is_groq_available, transcribe_reference_wav, synthesize_preset_groq
 from src.audit_logger import log_generation_event
@@ -141,7 +145,6 @@ with col_left:
 
     consent_ok = st.checkbox("I confirm I own or have explicit authorization to synthesize this voice.")
     run_btn = st.button("🚀 Generate Chunk-by-Chunk & Combine", type="primary", use_container_width=True)
-
 with col_right:
     st.subheader("3. Live Chunk-by-Chunk & Combined Output")
     st.info(f"**Active Profile:** {selected_accent} (Speed: `{speech_speed}x`)")
@@ -158,6 +161,7 @@ with col_right:
             progress = st.progress(0, text="Preparing low-memory disk workspace...")
             chunk_feed = st.container()
             tts_engine = None
+            similarity_score = None
 
             try:
                 with tempfile.TemporaryDirectory() as session_dir:
@@ -190,7 +194,6 @@ with col_right:
                         else:
                             synthesize_preset_groq(text_line, preset_voice, groq_api_key, seg_path)
 
-                        # Show immediate chunk preview in UI while keeping RAM low
                         with chunk_feed.expander(f"✅ Chunk {idx + 1}/{total}: {text_line[:55]}...", expanded=False):
                             with open(seg_path, "rb") as f_seg:
                                 st.audio(f_seg.read(), format="audio/wav")
@@ -198,9 +201,14 @@ with col_right:
                         stitched_inputs.append((ts_ms, seg_path))
                         gc.collect()
 
-                    progress.progress(0.95, text="Combining all chunks on disk into master presentation...")
+                    progress.progress(0.92, text="Combining all chunks on disk into master presentation...")
                     master_wav_path = os.path.join(session_dir, "master_presentation.wav")
                     stitch_timeline_to_disk(stitched_inputs, master_wav_path)
+
+                    # Compute acoustic voice similarity before deleting temp workspace
+                    if engine_choice == "Zero-Shot Voice Cloning (F5-TTS)" and os.path.exists(norm_ref_path):
+                        progress.progress(0.97, text="Verifying acoustic speaker similarity...")
+                        similarity_score = compute_voice_similarity(norm_ref_path, master_wav_path)
 
                     with open(master_wav_path, "rb") as f_master:
                         final_wav_bytes = f_master.read()
@@ -224,10 +232,23 @@ with col_right:
 
                 if used_fallback:
                     st.warning(
-                        f"Public F5-TTS GPU Spaces are currently offline, so your presentation was automatically synthesized using **{selected_accent}** neural speech."
+                        f"Public F5-TTS GPU Spaces were offline, so your presentation used **{selected_accent}** neural speech."
                     )
                 else:
                     st.success(f"All {total} cloned chunks combined into your master presentation!")
+
+                # Display Acoustic Voice Match Verification Metrics
+                if similarity_score is not None:
+                    m1, m2 = st.columns(2)
+                    m1.metric(
+                        label="🎯 Acoustic Voice Match",
+                        value=f"{similarity_score}%",
+                        delta="Zero-Shot Cloned" if not used_fallback else "Regional Neural Voice",
+                    )
+                    m2.metric(
+                        label="🔊 Active Synthesis Engine",
+                        value="F5-TTS Clone" if not used_fallback else "Edge Regional TTS",
+                    )
 
                 st.audio(final_wav_bytes, format="audio/wav")
                 st.download_button(
