@@ -2,6 +2,15 @@ import io
 from typing import Optional
 from groq import Groq
 
+GROQ_ORPHEUS_VOICES = [
+    "troy",
+    "hannah",
+    "autumn",
+    "diana",
+    "daniel",
+    "austin",
+]
+
 
 def is_groq_available(api_key: Optional[str]) -> bool:
     return bool(api_key and api_key.strip().startswith("gsk_"))
@@ -23,11 +32,13 @@ def transcribe_reference_wav(wav_bytes: bytes, api_key: str) -> str:
 
 
 def synthesize_preset_groq(text: str, voice_name: str, api_key: str, dest_wav_path: str) -> str:
-    """Ultra-fast preset voice narration fallback powered by Groq PlayAI TTS."""
+    """Ultra-fast preset voice narration powered by Groq Canopy Labs Orpheus TTS."""
     client = Groq(api_key=api_key)
+    selected_voice = voice_name if voice_name in GROQ_ORPHEUS_VOICES else "troy"
+
     response = client.audio.speech.create(
-        model="playai-tts",
-        voice=voice_name,
+        model="canopylabs/orpheus-v1-english",
+        voice=selected_voice,
         input=text,
         response_format="wav",
     )
