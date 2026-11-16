@@ -1,5 +1,4 @@
 # 🎙️ Enterprise AI Voice Cloning Presentation Studio
-### Zero-Shot Acoustic Synthesis & Timestamp-Synchronized Narration Framework
 # 🎙️ Own-Voice AI Cloning Presentation Studio
 ### Zero-Shot Acoustic Synthesis, Speaker Verification & Timestamp-Synchronized Narration Framework
 
