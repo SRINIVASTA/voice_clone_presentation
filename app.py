@@ -160,7 +160,12 @@ with col_right:
                     norm_ref_path = os.path.join(session_dir, "norm_ref.wav")
                     normalize_reference_audio(active_voice_bytes, norm_ref_path, max_duration_ms=12000)
 
-                    tts_engine = F5TTSClient(hf_token=hf_token, custom_space=custom_hf_space)
+                    tts_engine = F5TTSClient(
+                        hf_token=hf_token,
+                        custom_space=custom_hf_space,
+                        accent_label=selected_accent,
+                        allow_fallback=True,
+                    )
 
                     stitched_inputs = []
                     total = len(timeline_items)
