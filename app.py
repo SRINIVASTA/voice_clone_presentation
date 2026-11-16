@@ -43,41 +43,46 @@ with st.sidebar:
         ],
     )
 
-    hf_token = None
-    custom_hf_space = ""
-    groq_api_key = None
+    is_cloning_mode = selected_mode.startswith("1.")
+    is_groq_mode = selected_mode.startswith("2.")
+    is_edge_mode = selected_mode.startswith("3.")
+
+    hf_token = secret_hf_token
+    custom_hf_space = secret_custom_space
+    groq_api_key = secret_groq_key
     preset_voice = "Fritz-PlayAI"
 
-    if selected_mode.startswith("1."):
-        st.subheader("🔑 F5-TTS Space Configuration")
-        custom_hf_space = st.text_input(
-            "Hugging Face Space ID",
-            value=secret_custom_space,
-            placeholder="e.g., SRINIVASTA/f5-tts-cloner",
-            help="Enter your own Hugging Face Space ID for guaranteed cloning, or leave blank to scan public Spaces.",
-        )
+    # Show unified API Secrets panel for both Option 1 and Option 2
+    if is_cloning_mode or is_groq_mode:
+        st.divider()
+        st.subheader("🔑 Enterprise API Credentials")
+        if secret_hf_token or secret_groq_key:
+            st.caption("✅ Auto-loaded from Streamlit Secrets")
+
         hf_token = st.text_input(
-            "Hugging Face Token (Optional)",
+            "Hugging Face Token (HF_TOKEN)",
             value=secret_hf_token,
             type="password",
+            help="Auto-loaded from st.secrets['HF_TOKEN']. Used for F5-TTS Spaces.",
+        )
+        custom_hf_space = st.text_input(
+            "Custom F5-TTS Space ID (Optional)",
+            value=secret_custom_space,
+            placeholder="e.g., SRINIVASTA/f5-tts-cloner",
+            help="Auto-loaded from st.secrets['CUSTOM_HF_SPACE'] if set.",
         )
         groq_api_key = st.text_input(
-            "Groq Key for Auto-Transcribe (Optional)",
+            "Groq API Key (GROQ_API_KEY)",
             value=secret_groq_key,
             type="password",
+            help="Auto-loaded from st.secrets['GROQ_API_KEY']. Unlocks Whisper Auto-Transcribe & Groq Preset Voices.",
         )
 
-    elif selected_mode.startswith("2."):
-        st.subheader("🔑 Groq API Configuration")
-        groq_api_key = st.text_input(
-            "Groq API Key (Required)",
-            value=secret_groq_key,
-            type="password",
-        )
-        preset_voice = st.selectbox(
-            "Select Groq Preset Voice",
-            ["Fritz-PlayAI", "Arista-PlayAI", "Atlas-PlayAI", "Celeste-PlayAI", "Mason-PlayAI"],
-        )
+        if is_groq_mode:
+            preset_voice = st.selectbox(
+                "Select Groq Preset Voice",
+                ["Fritz-PlayAI", "Arista-PlayAI", "Atlas-PlayAI", "Celeste-PlayAI", "Mason-PlayAI"],
+            )
 
     st.divider()
     st.subheader("🌍 Language & Accent Profile")
@@ -89,9 +94,6 @@ with st.sidebar:
     speech_speed = ACCENT_PROFILES[selected_accent]
 
 groq_enabled = is_groq_available(groq_api_key)
-is_cloning_mode = selected_mode.startswith("1.")
-is_groq_mode = selected_mode.startswith("2.")
-is_edge_mode = selected_mode.startswith("3.")
 
 col_left, col_right = st.columns([1.05, 0.95], gap="large")
 
