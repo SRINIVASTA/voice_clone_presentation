@@ -1,8 +1,9 @@
 streamlit
 gradio_client
 huggingface_hub
+edge-tts
 pydub
-audioop-lts; python_version >= "3.13"
+audioop-lts; python_version >= "3.13
 groq
 pytest
 ruff
