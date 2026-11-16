@@ -78,8 +78,8 @@ with st.sidebar:
 
         if is_groq_mode:
             preset_voice = st.selectbox(
-                "Select Groq Preset Voice",
-                ["Fritz-PlayAI", "Arista-PlayAI", "Atlas-PlayAI", "Celeste-PlayAI", "Mason-PlayAI"],
+                "Select Groq Orpheus Voice",
+                ["troy", "hannah", "autumn", "diana", "daniel", "austin"],
             )
 
     st.divider()
