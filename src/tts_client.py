@@ -1,3 +1,4 @@
+import concurrent.futures
 import os
 import shutil
 import time
@@ -12,6 +13,8 @@ FALLBACK_SPACES = [
     "abidlabs/E2-F5-TTS",
     "emilalvaro/E2-F5-TTS",
 ]
+
+REQUEST_TIMEOUT_SECONDS = 35
 
 
 @st.cache_resource(show_spinner="Loading local F5-TTS model (No-API Mode)...")
@@ -38,12 +41,14 @@ def _extract_audio_path(result) -> Optional[str]:
 
 
 class F5TTSClient:
-    """Supports both Local No-API F5-TTS and Remote API F5-TTS with schema-aware keyword mapping."""
+    """Timeout-protected F5-TTS client that reuses active connections and fails over fast."""
 
     def __init__(self, use_api: bool = True, hf_token: Optional[str] = None, custom_space: Optional[str] = None):
         self.use_api = use_api
         self.hf_token = hf_token.strip() if (hf_token and hf_token.strip()) else None
         self.spaces = ([custom_space.strip()] if (custom_space and custom_space.strip()) else []) + FALLBACK_SPACES
+        self._active_client: Optional[Client] = None
+        self._active_space: Optional[str] = None
 
     def clone_segment(
         self,
@@ -65,25 +70,20 @@ class F5TTSClient:
         dest_wav_path: str,
         speed: float = 0.92,
     ) -> str:
-        """Runs 100% locally without any external API keys or Space endpoints."""
         engine = _load_local_f5_model()
-        try:
-            wav, sr, _ = engine.infer(
-                ref_file=ref_wav_path,
-                ref_text=ref_text,
-                gen_text=gen_text,
-                speed=speed,
-            )
-        except TypeError:
-            wav, sr, _ = engine.infer(
-                ref_file=ref_wav_path,
-                ref_text=ref_text,
-                gen_text=gen_text,
-            )
+        wav, sr, _ = engine.infer(ref_file=ref_wav_path, ref_text=ref_text, gen_text=gen_text)
         wavfile.write(dest_wav_path, sr, (wav * 32767).astype(np.int16))
         return dest_wav_path
 
-    def _predict_schema_aware(
+    def _connect_with_timeout(self, space_id: str) -> Client:
+        def _init_client():
+            return Client(space_id, token=self.hf_token) if self.hf_token else Client(space_id)
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+            future = pool.submit(_init_client)
+            return future.result(timeout=20)
+
+    def _predict_with_timeout(
         self,
         client: Client,
         ref_wav_path: str,
@@ -91,48 +91,22 @@ class F5TTSClient:
         gen_text: str,
         speed: float = 0.92,
     ):
-        """Maps inputs by parameter name from the Space's live API schema."""
-        audio_input = handle_file(ref_wav_path)
+        def _run_predict():
+            audio_input = handle_file(ref_wav_path)
+            try:
+                return client.predict(
+                    ref_audio=audio_input,
+                    ref_text=ref_text,
+                    gen_text=gen_text,
+                    remove_silence=False,
+                    api_name="/predict",
+                )
+            except Exception:
+                return client.predict(audio_input, ref_text, gen_text, api_name="/predict")
 
-        # 1. Primary verified signature for mrfakename/E2-F5-TTS (/predict)
-        try:
-            return client.predict(
-                ref_audio=audio_input,
-                ref_text=ref_text,
-                gen_text=gen_text,
-                remove_silence=False,
-                api_name="/predict",
-            )
-        except Exception:
-            pass
-
-        # 2. Schema-aware parameter mapping for any F5-TTS fork
-        api_info = client.view_api(return_format="dict")
-        named_endpoints = api_info.get("named_endpoints", {})
-
-        for ep_name, ep_meta in named_endpoints.items():
-            params = ep_meta.get("parameters", [])
-            param_names = [p.get("parameter_name", "") for p in params]
-            if any("audio" in n for n in param_names) and any("gen" in n or "text" in n for n in param_names):
-                kwargs = {}
-                for p in params:
-                    p_name = p.get("parameter_name", "")
-                    if "audio" in p_name:
-                        kwargs[p_name] = audio_input
-                    elif "ref" in p_name and "text" in p_name:
-                        kwargs[p_name] = ref_text
-                    elif "gen" in p_name or p_name == "text":
-                        kwargs[p_name] = gen_text
-                    elif "silence" in p_name:
-                        kwargs[p_name] = False
-                    elif "speed" in p_name:
-                        kwargs[p_name] = speed
-                    elif "model" in p_name:
-                        kwargs[p_name] = "F5-TTS"
-                return client.predict(**kwargs, api_name=ep_name)
-
-        # 3. Last-resort 3-argument call on /predict
-        return client.predict(audio_input, ref_text, gen_text, api_name="/predict")
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+            future = pool.submit(_run_predict)
+            return future.result(timeout=REQUEST_TIMEOUT_SECONDS)
 
     def _clone_via_api(
         self,
@@ -142,18 +116,38 @@ class F5TTSClient:
         dest_wav_path: str,
         speed: float = 0.92,
     ) -> str:
-        """Runs via Hugging Face Gradio API with schema-aware mapping and failover."""
         last_error = None
-        for space_id in self.spaces:
-            for attempt in range(3):
+        # Try the already-connected warm Space first, then fail over through remaining Spaces
+        ordered_spaces = (
+            [self._active_space] + [s for s in self.spaces if s != self._active_space]
+            if self._active_space
+            else self.spaces
+        )
+
+        for space_id in ordered_spaces:
+            for attempt in range(2):
                 try:
-                    client = Client(space_id, token=self.hf_token) if self.hf_token else Client(space_id)
-                    result = self._predict_schema_aware(client, ref_wav_path, ref_text, gen_text, speed=speed)
+                    if self._active_client is None or self._active_space != space_id:
+                        self._active_client = self._connect_with_timeout(space_id)
+                        self._active_space = space_id
+
+                    result = self._predict_with_timeout(
+                        self._active_client, ref_wav_path, ref_text, gen_text, speed=speed
+                    )
                     generated_path = _extract_audio_path(result)
                     if generated_path and os.path.exists(generated_path):
                         shutil.copyfile(generated_path, dest_wav_path)
                         return dest_wav_path
+                except concurrent.futures.TimeoutError:
+                    last_error = f"Timed out after {REQUEST_TIMEOUT_SECONDS}s on {space_id}"
+                    self._active_client = None
+                    break  # Immediately switch to next Space instead of waiting
                 except Exception as exc:
                     last_error = exc
-                    time.sleep(2 * (attempt + 1))
-        raise RuntimeError(f"All F5-TTS API endpoints failed after retries. Last error: {last_error}")
+                    self._active_client = None
+                    time.sleep(1)
+
+        raise RuntimeError(
+            f"Public F5-TTS Spaces are currently busy or asleep ({last_error}). "
+            "Tip: Switch to 'With API' mode and add your free HF_TOKEN or GROQ_API_KEY in the sidebar."
+        )
