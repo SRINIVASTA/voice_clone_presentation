@@ -17,9 +17,11 @@ from src.audit_logger import log_generation_event
 st.set_page_config(page_title="Enterprise Voice Presentation Studio", page_icon="🎙️", layout="wide")
 
 active_user = enforce_enterprise_auth()
-secret_hf_token = st.secrets.get("HF_TOKEN", "")
-secret_groq_key = st.secrets.get("GROQ_API_KEY", "")
-secret_custom_space = st.secrets.get("CUSTOM_HF_SPACE", "")
+
+# Read secrets securely on the backend without ever passing them into UI input fields
+secret_hf_token = str(st.secrets.get("HF_TOKEN", "")).strip()
+secret_groq_key = str(st.secrets.get("GROQ_API_KEY", "")).strip()
+secret_custom_space = str(st.secrets.get("CUSTOM_HF_SPACE", "")).strip()
 
 ACCENT_PROFILES = {
     "🇮🇳 India (English) — Clear Cadence": 0.90,
@@ -52,31 +54,27 @@ with st.sidebar:
     groq_api_key = secret_groq_key
     preset_voice = "Fritz-PlayAI"
 
-    # Show unified API Secrets panel for both Option 1 and Option 2
     if is_cloning_mode or is_groq_mode:
         st.divider()
-        st.subheader("🔑 Enterprise API Credentials")
-        if secret_hf_token or secret_groq_key:
-            st.caption("✅ Auto-loaded from Streamlit Secrets")
+        st.subheader("🔒 Enterprise Secrets Status")
 
-        hf_token = st.text_input(
-            "Hugging Face Token (HF_TOKEN)",
-            value=secret_hf_token,
-            type="password",
-            help="Auto-loaded from st.secrets['HF_TOKEN']. Used for F5-TTS Spaces.",
-        )
-        custom_hf_space = st.text_input(
-            "Custom F5-TTS Space ID (Optional)",
-            value=secret_custom_space,
-            placeholder="e.g., SRINIVASTA/f5-tts-cloner",
-            help="Auto-loaded from st.secrets['CUSTOM_HF_SPACE'] if set.",
-        )
-        groq_api_key = st.text_input(
-            "Groq API Key (GROQ_API_KEY)",
-            value=secret_groq_key,
-            type="password",
-            help="Auto-loaded from st.secrets['GROQ_API_KEY']. Unlocks Whisper Auto-Transcribe & Groq Preset Voices.",
-        )
+        if secret_hf_token:
+            st.success("HF_TOKEN: Active (Secured in Vault)")
+        else:
+            hf_token = st.text_input("Enter HF_TOKEN (Optional)", type="password")
+
+        if secret_groq_key:
+            st.success("GROQ_API_KEY: Active (Secured in Vault)")
+        else:
+            groq_api_key = st.text_input("Enter GROQ_API_KEY", type="password")
+
+        if is_cloning_mode:
+            custom_hf_space = st.text_input(
+                "Target F5-TTS Space ID",
+                value=secret_custom_space,
+                placeholder="e.g., SRINIVASTA/f5-tts-cloner",
+                help="Uses your personal Hugging Face Space ID if set.",
+            )
 
         if is_groq_mode:
             preset_voice = st.selectbox(
