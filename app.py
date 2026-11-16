@@ -19,6 +19,7 @@ st.set_page_config(page_title="Enterprise Voice Presentation Studio", page_icon=
 active_user = enforce_enterprise_auth()
 secret_hf_token = st.secrets.get("HF_TOKEN", "")
 secret_groq_key = st.secrets.get("GROQ_API_KEY", "")
+secret_custom_space = st.secrets.get("CUSTOM_HF_SPACE", "")
 
 ACCENT_PROFILES = {
     "🇮🇳 India (English) — Clear Cadence": 0.90,
@@ -44,14 +45,21 @@ with st.sidebar:
     use_api_mode = operation_mode.startswith("With API")
     hf_token = None
     groq_api_key = None
+    custom_hf_space = secret_custom_space
 
     if use_api_mode:
-        st.subheader("🔑 API Credentials")
+        st.subheader("🔑 API Credentials & Endpoint")
         hf_token = st.text_input(
             "Hugging Face Token (Optional)",
             value=secret_hf_token,
             type="password",
             help="Authenticates private F5-TTS Spaces and avoids public rate limits.",
+        )
+        custom_hf_space = st.text_input(
+            "Custom F5-TTS Space ID (Optional)",
+            value=secret_custom_space,
+            placeholder="e.g., SRINIVASTA/E2-F5-TTS",
+            help="Point directly to your own duplicated Hugging Face Space for guaranteed zero-shot voice cloning.",
         )
         groq_api_key = st.text_input(
             "Groq API Key (Optional)",
@@ -171,6 +179,7 @@ with col_right:
                         tts_engine = F5TTSClient(
                             use_api=True,
                             hf_token=hf_token,
+                            custom_space=custom_hf_space,
                             accent_label=selected_accent,
                             allow_fallback=True,
                         )
@@ -217,10 +226,13 @@ with col_right:
                     gc.collect()
 
                 used_fallback = bool(tts_engine and getattr(tts_engine, "_fallback_triggered", False))
+                active_space_used = getattr(tts_engine, "_active_space", None)
+                last_err = getattr(tts_engine, "last_space_error", "")
+
                 engine_summary = (
                     f"{engine_choice} (Regional Neural Fallback)"
                     if used_fallback
-                    else engine_choice
+                    else f"{engine_choice} ({active_space_used})"
                 )
 
                 log_generation_event(
@@ -232,10 +244,10 @@ with col_right:
 
                 if used_fallback:
                     st.warning(
-                        f"Public F5-TTS GPU Spaces were offline, so your presentation used **{selected_accent}** neural speech."
+                        f"F5-TTS GPU Spaces were unavailable ({last_err or 'offline'}), so your presentation used **{selected_accent}** neural speech."
                     )
                 else:
-                    st.success(f"All {total} cloned chunks combined into your master presentation!")
+                    st.success(f"All {total} chunks cloned via **{active_space_used}** and combined into your master presentation!")
 
                 # Display Acoustic Voice Match Verification Metrics
                 if similarity_score is not None:
@@ -247,7 +259,7 @@ with col_right:
                     )
                     m2.metric(
                         label="🔊 Active Synthesis Engine",
-                        value="F5-TTS Clone" if not used_fallback else "Edge Regional TTS",
+                        value=f"F5-TTS ({active_space_used})" if not used_fallback else "Edge Regional TTS",
                     )
 
                 st.audio(final_wav_bytes, format="audio/wav")
