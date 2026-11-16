@@ -83,16 +83,13 @@ def _extract_acoustic_profile(wav_path: str) -> List[float]:
         total_samples = len(raw) // 2
         if total_samples < 500:
             return [0.0] * 16
-        # Read up to 48,000 samples (2 seconds of active audio) to keep RAM minimal
         sample_count = min(total_samples, 48000)
         samples = struct.unpack(f"<{sample_count}h", raw[: sample_count * 2])
 
-    # Filter out silent frames
     voiced = [s for s in samples if abs(s) > 300]
     if len(voiced) < 256:
         return [0.0] * 16
 
-    # Split voiced signal into 16 segments and compute RMS energy + zero-crossing density
     step = len(voiced) // 16
     profile: List[float] = []
     for i in range(16):
@@ -111,6 +108,5 @@ def compute_voice_similarity(ref_wav_path: str, gen_wav_path: str) -> float:
     p_gen = _extract_acoustic_profile(gen_wav_path)
 
     dot = sum(a * b for a, b in zip(p_ref, p_gen))
-    # Map raw cosine similarity [0.75, 1.0] into an intuitive [0%, 100%] scale
     scaled = max(0.0, min(100.0, ((dot - 0.75) / 0.25) * 100.0))
     return round(scaled, 1)
