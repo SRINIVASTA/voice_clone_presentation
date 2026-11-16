@@ -18,7 +18,7 @@ st.set_page_config(page_title="Enterprise Voice Presentation Studio", page_icon=
 
 active_user = enforce_enterprise_auth()
 
-# Read secrets securely on the backend without ever passing them into UI input fields
+# Read secrets securely on the backend without ever rendering tokens into HTML inputs
 secret_hf_token = str(st.secrets.get("HF_TOKEN", "")).strip()
 secret_groq_key = str(st.secrets.get("GROQ_API_KEY", "")).strip()
 secret_custom_space = str(st.secrets.get("CUSTOM_HF_SPACE", "")).strip()
@@ -52,7 +52,7 @@ with st.sidebar:
     hf_token = secret_hf_token
     custom_hf_space = secret_custom_space
     groq_api_key = secret_groq_key
-    preset_voice = "Fritz-PlayAI"
+    preset_voice = "troy"
 
     if is_cloning_mode or is_groq_mode:
         st.divider()
@@ -70,10 +70,10 @@ with st.sidebar:
 
         if is_cloning_mode:
             custom_hf_space = st.text_input(
-                "Target F5-TTS Space ID",
+                "Target F5-TTS Space ID (Optional)",
                 value=secret_custom_space,
-                placeholder="e.g., SRINIVASTA/f5-tts-cloner",
-                help="Uses your personal Hugging Face Space ID if set.",
+                placeholder="Leave blank for auto-discovery",
+                help="Enter your personal Space ID (e.g., SRINIVASTA/f5-tts-cloner) or leave blank to auto-scan live Spaces.",
             )
 
         if is_groq_mode:
@@ -106,27 +106,31 @@ with col_left:
         uploaded_wav = st.file_uploader("Upload clean 5–12 second speaker clip", type=["wav"])
         if uploaded_wav is not None:
             wav_data = uploaded_wav.getvalue()
-            if wav_data:
+            if wav_data and st.session_state.get("voice_bytes") != wav_data:
                 st.session_state["voice_bytes"] = wav_data
+                st.session_state["auto_ref_text"] = ""
     else:
         mic_audio = st.audio_input("Record 5–12 seconds of clear speech")
         if mic_audio is not None:
             mic_data = mic_audio.getvalue()
-            if mic_data:
+            if mic_data and st.session_state.get("voice_bytes") != mic_data:
                 st.session_state["voice_bytes"] = mic_data
+                st.session_state["auto_ref_text"] = ""
 
     voice_bytes = st.session_state.get("voice_bytes", None)
     if voice_bytes:
         st.audio(voice_bytes, format="audio/wav")
 
-    if groq_enabled and voice_bytes:
-        if st.button("✨ Auto-Transcribe Reference Audio (Groq Whisper)"):
-            with st.spinner("Transcribing reference voice..."):
+        # Automatically transcribe new voice recordings/uploads via Groq Whisper
+        if groq_enabled and not st.session_state.get("auto_ref_text"):
+            with st.spinner("✨ Auto-transcribing your voice sample via Groq Whisper..."):
                 try:
-                    st.session_state["auto_ref_text"] = transcribe_reference_wav(voice_bytes, groq_api_key)
-                    st.success("Transcript extracted!")
+                    extracted = transcribe_reference_wav(voice_bytes, groq_api_key)
+                    if extracted:
+                        st.session_state["auto_ref_text"] = extracted
+                        st.success("Reference speech transcribed automatically!")
                 except Exception as exc:
-                    st.error(f"Transcription failed: {exc}")
+                    st.warning(f"Auto-transcription skipped: {exc}")
 
     st.subheader("2. Presentation Script (.txt)")
     uploaded_script = st.file_uploader("Upload [MM:SS] timestamped script", type=["txt"])
@@ -145,7 +149,7 @@ with col_left:
             st.error(f"Script Format Error: {err}")
 
     ref_text = st.text_input(
-        "Reference Transcript (Must match exact words spoken in the reference clip for Option 1)",
+        "Reference Transcript (Auto-filled from your voice clip; must match exact words spoken)",
         value=parsed_ref,
     )
 
@@ -164,7 +168,7 @@ with col_right:
         elif is_cloning_mode and (not active_voice_bytes or not ref_text.strip()):
             st.warning("Option 1 requires both a reference .wav clip and its exact reference text.")
         elif is_groq_mode and not groq_enabled:
-            st.error("Option 2 requires a valid Groq API Key (`gsk_...`) in the sidebar.")
+            st.error("Option 2 requires a valid Groq API Key (`gsk_...`) in Streamlit Secrets.")
         else:
             progress = st.progress(0, text="Preparing low-memory disk workspace...")
             chunk_feed = st.container()
