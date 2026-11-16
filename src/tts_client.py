@@ -10,6 +10,7 @@ from gradio_client import Client, handle_file
 FALLBACK_SPACES = [
     "mrfakename/E2-F5-TTS",
     "abidlabs/E2-F5-TTS",
+    "emilalvaro/E2-F5-TTS",
 ]
 
 
@@ -37,7 +38,7 @@ def _extract_audio_path(result) -> Optional[str]:
 
 
 class F5TTSClient:
-    """Supports both Local No-API F5-TTS and Remote API F5-TTS with dynamic endpoint discovery."""
+    """Supports both Local No-API F5-TTS and Remote API F5-TTS with schema-aware keyword mapping."""
 
     def __init__(self, use_api: bool = True, hf_token: Optional[str] = None, custom_space: Optional[str] = None):
         self.use_api = use_api
@@ -82,7 +83,7 @@ class F5TTSClient:
         wavfile.write(dest_wav_path, sr, (wav * 32767).astype(np.int16))
         return dest_wav_path
 
-    def _predict_dynamic(
+    def _predict_schema_aware(
         self,
         client: Client,
         ref_wav_path: str,
@@ -90,44 +91,48 @@ class F5TTSClient:
         gen_text: str,
         speed: float = 0.92,
     ):
-        """Auto-detects the active TTS endpoint name and parameter structure on the Space."""
+        """Maps inputs by parameter name from the Space's live API schema."""
+        audio_input = handle_file(ref_wav_path)
+
+        # 1. Primary verified signature for mrfakename/E2-F5-TTS (/predict)
+        try:
+            return client.predict(
+                ref_audio=audio_input,
+                ref_text=ref_text,
+                gen_text=gen_text,
+                remove_silence=False,
+                api_name="/predict",
+            )
+        except Exception:
+            pass
+
+        # 2. Schema-aware parameter mapping for any F5-TTS fork
         api_info = client.view_api(return_format="dict")
         named_endpoints = api_info.get("named_endpoints", {})
 
-        candidate_names = ["/basic_tts", "/infer", "/predict", "/generate", "/tts"]
-        chosen_api = next((name for name in candidate_names if name in named_endpoints), None)
+        for ep_name, ep_meta in named_endpoints.items():
+            params = ep_meta.get("parameters", [])
+            param_names = [p.get("parameter_name", "") for p in params]
+            if any("audio" in n for n in param_names) and any("gen" in n or "text" in n for n in param_names):
+                kwargs = {}
+                for p in params:
+                    p_name = p.get("parameter_name", "")
+                    if "audio" in p_name:
+                        kwargs[p_name] = audio_input
+                    elif "ref" in p_name and "text" in p_name:
+                        kwargs[p_name] = ref_text
+                    elif "gen" in p_name or p_name == "text":
+                        kwargs[p_name] = gen_text
+                    elif "silence" in p_name:
+                        kwargs[p_name] = False
+                    elif "speed" in p_name:
+                        kwargs[p_name] = speed
+                    elif "model" in p_name:
+                        kwargs[p_name] = "F5-TTS"
+                return client.predict(**kwargs, api_name=ep_name)
 
-        if not chosen_api and named_endpoints:
-            for ep_name, ep_meta in named_endpoints.items():
-                if len(ep_meta.get("parameters", [])) >= 3:
-                    chosen_api = ep_name
-                    break
-
-        audio_input = handle_file(ref_wav_path)
-
-        if chosen_api:
-            try:
-                return client.predict(
-                    audio_input,
-                    ref_text,
-                    gen_text,
-                    False,
-                    0.15,
-                    speed,
-                    api_name=chosen_api,
-                )
-            except TypeError:
-                return client.predict(
-                    audio_input,
-                    ref_text,
-                    gen_text,
-                    api_name=chosen_api,
-                )
-
-        try:
-            return client.predict(audio_input, ref_text, gen_text, False, 0.15, speed, fn_index=0)
-        except TypeError:
-            return client.predict(audio_input, ref_text, gen_text, fn_index=0)
+        # 3. Last-resort 3-argument call on /predict
+        return client.predict(audio_input, ref_text, gen_text, api_name="/predict")
 
     def _clone_via_api(
         self,
@@ -137,13 +142,13 @@ class F5TTSClient:
         dest_wav_path: str,
         speed: float = 0.92,
     ) -> str:
-        """Runs via Hugging Face Gradio API with automatic endpoint discovery and failover."""
+        """Runs via Hugging Face Gradio API with schema-aware mapping and failover."""
         last_error = None
         for space_id in self.spaces:
             for attempt in range(3):
                 try:
                     client = Client(space_id, token=self.hf_token) if self.hf_token else Client(space_id)
-                    result = self._predict_dynamic(client, ref_wav_path, ref_text, gen_text, speed=speed)
+                    result = self._predict_schema_aware(client, ref_wav_path, ref_text, gen_text, speed=speed)
                     generated_path = _extract_audio_path(result)
                     if generated_path and os.path.exists(generated_path):
                         shutil.copyfile(generated_path, dest_wav_path)
