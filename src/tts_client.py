@@ -7,9 +7,10 @@ import scipy.io.wavfile as wavfile
 import streamlit as st
 from gradio_client import Client, handle_file
 
+# Verified active Hugging Face Spaces running F5-TTS
 FALLBACK_SPACES = [
     "mrfakename/E2-F5-TTS",
-    "SWivid/F5-TTS",
+    "abidlabs/E2-F5-TTS",
 ]
 
 
@@ -24,8 +25,8 @@ class F5TTSClient:
 
     def __init__(self, use_api: bool = True, hf_token: Optional[str] = None, custom_space: Optional[str] = None):
         self.use_api = use_api
-        self.hf_token = hf_token if hf_token and hf_token.strip() else None
-        self.spaces = ([custom_space] if custom_space else []) + FALLBACK_SPACES
+        self.hf_token = hf_token.strip() if (hf_token and hf_token.strip()) else None
+        self.spaces = ([custom_space.strip()] if (custom_space and custom_space.strip()) else []) + FALLBACK_SPACES
 
     def clone_segment(self, ref_wav_path: str, ref_text: str, gen_text: str, dest_wav_path: str) -> str:
         if not self.use_api:
@@ -49,7 +50,12 @@ class F5TTSClient:
         for space_id in self.spaces:
             for attempt in range(3):
                 try:
-                    client = Client(space_id, token=self.hf_token)
+                    # Only pass token if an actual HF_TOKEN string exists
+                    if self.hf_token:
+                        client = Client(space_id, token=self.hf_token)
+                    else:
+                        client = Client(space_id)
+
                     result = client.predict(
                         ref_audio_input=handle_file(ref_wav_path),
                         ref_text_input=ref_text,
@@ -59,6 +65,7 @@ class F5TTSClient:
                         speed_slider=1.0,
                         api_name="/basic_tts",
                     )
+                    # /basic_tts returns (wav_filepath, spectrogram_filepath, ref_text)
                     generated_path = result[0] if isinstance(result, (list, tuple)) else result
                     if generated_path and os.path.exists(generated_path):
                         shutil.copyfile(generated_path, dest_wav_path)
