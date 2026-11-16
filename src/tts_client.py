@@ -5,6 +5,8 @@ import re
 import shutil
 import time
 from typing import List, Optional
+import numpy as np
+import scipy.io.wavfile as wavfile
 import streamlit as st
 from gradio_client import Client, handle_file
 from huggingface_hub import HfApi
@@ -26,9 +28,18 @@ EDGE_VOICE_MAP = {
 REQUEST_TIMEOUT_SECONDS = 60
 
 
+@st.cache_resource(show_spinner="Loading local F5-TTS GPU/CPU engine...")
+def _get_local_f5_engine():
+    """Loads local F5-TTS model if installed (e.g., in Google Colab); returns None on Streamlit Cloud."""
+    try:
+        from f5_tts.api import F5TTS
+        return F5TTS()
+    except ImportError:
+        return None
+
+
 @st.cache_data(ttl=180, show_spinner=False)
 def _discover_running_f5_spaces(hf_token: Optional[str] = None) -> List[str]:
-    """Queries Hugging Face Hub API in real time for F5-TTS Spaces currently in RUNNING state."""
     discovered: List[str] = []
     try:
         api = HfApi(token=hf_token if hf_token else None)
@@ -49,7 +60,6 @@ def _discover_running_f5_spaces(hf_token: Optional[str] = None) -> List[str]:
 
 
 def _extract_audio_path(result) -> Optional[str]:
-    """Recursively extracts the first existing .wav/.audio file path from Gradio output."""
     if isinstance(result, str) and os.path.exists(result):
         return result
     if isinstance(result, dict):
@@ -66,7 +76,6 @@ def _extract_audio_path(result) -> Optional[str]:
 
 
 def _synthesize_edge_fallback(gen_text: str, accent_label: str, dest_wav_path: str) -> str:
-    """Zero-key regional neural TTS fallback so Without-API mode always generates audio."""
     import edge_tts
     from pydub import AudioSegment
 
@@ -101,7 +110,7 @@ def _synthesize_edge_fallback(gen_text: str, accent_label: str, dest_wav_path: s
 
 
 class F5TTSClient:
-    """F5-TTS voice cloning client with automatic zero-key regional neural fallback."""
+    """Runs local F5-TTS automatically in Colab/GPU environments, or remote Spaces on Streamlit Cloud."""
 
     def __init__(
         self,
@@ -117,11 +126,7 @@ class F5TTSClient:
         if clean_custom and "/" not in clean_custom:
             clean_custom = f"SRINIVASTA/{clean_custom}"
 
-        if clean_custom:
-            self.spaces = [clean_custom]
-        else:
-            self.spaces = _discover_running_f5_spaces(self.hf_token)
-
+        self.spaces = [clean_custom] if clean_custom else _discover_running_f5_spaces(self.hf_token)
         self._active_client: Optional[Client] = None
         self._active_space: Optional[str] = None
         self._fallback_triggered: bool = False
@@ -131,68 +136,24 @@ class F5TTSClient:
             return Client(space_id, token=self.hf_token) if self.hf_token else Client(space_id)
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-            future = pool.submit(_init_client)
-            return future.result(timeout=25)
+            return pool.submit(_init_client).result(timeout=25)
 
-    def _predict_schema_aware(
-        self,
-        client: Client,
-        ref_wav_path: str,
-        ref_text: str,
-        gen_text: str,
-        speed: float = 0.92,
-    ):
-        audio_input = handle_file(ref_wav_path)
-        try:
-            return client.predict(
-                ref_audio=audio_input,
-                ref_text=ref_text,
-                gen_text=gen_text,
-                remove_silence=False,
-                api_name="/predict",
-            )
-        except Exception:
-            pass
+    def _predict_with_timeout(self, client: Client, ref_wav_path: str, ref_text: str, gen_text: str):
+        def _run():
+            audio_input = handle_file(ref_wav_path)
+            try:
+                return client.predict(
+                    ref_audio=audio_input,
+                    ref_text=ref_text,
+                    gen_text=gen_text,
+                    remove_silence=False,
+                    api_name="/predict",
+                )
+            except Exception:
+                return client.predict(audio_input, ref_text, gen_text, api_name="/predict")
 
-        api_info = client.view_api(return_format="dict")
-        named_endpoints = api_info.get("named_endpoints", {})
-
-        for ep_name, ep_meta in named_endpoints.items():
-            params = ep_meta.get("parameters", [])
-            param_names = [p.get("parameter_name", "") for p in params]
-            if any("audio" in n for n in param_names) and any("gen" in n or "text" in n for n in param_names):
-                kwargs = {}
-                for p in params:
-                    p_name = p.get("parameter_name", "")
-                    if "audio" in p_name:
-                        kwargs[p_name] = audio_input
-                    elif "ref" in p_name and "text" in p_name:
-                        kwargs[p_name] = ref_text
-                    elif "gen" in p_name or p_name == "text":
-                        kwargs[p_name] = gen_text
-                    elif "silence" in p_name:
-                        kwargs[p_name] = False
-                    elif "speed" in p_name:
-                        kwargs[p_name] = speed
-                    elif "model" in p_name:
-                        kwargs[p_name] = "F5-TTS"
-                return client.predict(**kwargs, api_name=ep_name)
-
-        return client.predict(audio_input, ref_text, gen_text, api_name="/predict")
-
-    def _predict_with_timeout(
-        self,
-        client: Client,
-        ref_wav_path: str,
-        ref_text: str,
-        gen_text: str,
-        speed: float = 0.92,
-    ):
         with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-            future = pool.submit(
-                self._predict_schema_aware, client, ref_wav_path, ref_text, gen_text, speed
-            )
-            return future.result(timeout=REQUEST_TIMEOUT_SECONDS)
+            return pool.submit(_run).result(timeout=REQUEST_TIMEOUT_SECONDS)
 
     def clone_segment(
         self,
@@ -202,10 +163,22 @@ class F5TTSClient:
         dest_wav_path: str,
         speed: float = 0.92,
     ) -> str:
+        # 1. If running in Google Colab (local f5-tts installed), clone directly on local T4 GPU
+        local_engine = _get_local_f5_engine()
+        if local_engine is not None:
+            self._active_space = "Local Colab GPU (F5-TTS)"
+            wav, sr, _ = local_engine.infer(
+                ref_file=ref_wav_path,
+                ref_text=ref_text,
+                gen_text=gen_text,
+            )
+            wavfile.write(dest_wav_path, sr, (wav * 32767).astype(np.int16))
+            return dest_wav_path
+
+        # 2. Otherwise use remote Hugging Face Spaces + fallback (Streamlit Cloud)
         if self._fallback_triggered:
             return _synthesize_edge_fallback(gen_text, self.accent_label, dest_wav_path)
 
-        last_error = None
         ordered_spaces = (
             [self._active_space] + [s for s in self.spaces if s != self._active_space]
             if self._active_space
@@ -218,15 +191,12 @@ class F5TTSClient:
                     self._active_client = self._connect_with_timeout(space_id)
                     self._active_space = space_id
 
-                result = self._predict_with_timeout(
-                    self._active_client, ref_wav_path, ref_text, gen_text, speed=speed
-                )
+                result = self._predict_with_timeout(self._active_client, ref_wav_path, ref_text, gen_text)
                 generated_path = _extract_audio_path(result)
                 if generated_path and os.path.exists(generated_path):
                     shutil.copyfile(generated_path, dest_wav_path)
                     return dest_wav_path
-            except Exception as exc:
-                last_error = f"{space_id}: {exc}"
+            except Exception:
                 self._active_client = None
                 time.sleep(0.5)
 
@@ -235,4 +205,4 @@ class F5TTSClient:
             self._active_space = "Edge Regional Neural TTS (Zero-Key)"
             return _synthesize_edge_fallback(gen_text, self.accent_label, dest_wav_path)
 
-        raise RuntimeError(f"Voice Cloning Space unavailable ({last_error}).")
+        raise RuntimeError("All voice cloning endpoints failed.")
