@@ -15,6 +15,14 @@ active_user = enforce_enterprise_auth()
 secret_hf_token = st.secrets.get("HF_TOKEN", "")
 secret_groq_key = st.secrets.get("GROQ_API_KEY", "")
 
+ACCENT_PROFILES = {
+    "🇮🇳 India (English) — Clear Cadence": 0.90,
+    "🇺🇸 United States (English) — Standard": 0.95,
+    "🇬🇧 United Kingdom (English) — Crisp": 0.95,
+    "🇦🇺 Australia (English) — Natural": 0.95,
+    "🌐 Neutral / Slower Presentation Pace": 0.85,
+}
+
 st.title("🎙️ Enterprise AI Voice Cloning Presentation Studio")
 st.caption("Hybrid zero-shot voice cloning supporting both No-API and API-accelerated execution.")
 
@@ -58,11 +66,22 @@ with st.sidebar:
         if backend_type.startswith("Local Python"):
             st.warning("⚠️ Local mode requires 8GB+ RAM. Use Public HF Cloud Spaces on Streamlit Cloud.")
 
+    st.divider()
+    st.subheader("🌍 Language & Accent Profile")
+    selected_accent = st.selectbox(
+        "Select Output Dialect & Cadence",
+        list(ACCENT_PROFILES.keys()),
+        index=0,
+        help="Optimizes speaking cadence and clarity for your target English dialect.",
+    )
+    speech_speed = ACCENT_PROFILES[selected_accent]
+
     groq_enabled = use_api_mode and is_groq_available(groq_api_key)
 
     engine_choice = "Zero-Shot Voice Cloning (F5-TTS)"
     preset_voice = "Fritz-PlayAI"
     if groq_enabled:
+        st.divider()
         engine_choice = st.radio(
             "Synthesis Engine",
             ["Zero-Shot Voice Cloning (F5-TTS)", "Ultra-Fast Preset Voice (Groq)"],
@@ -84,7 +103,6 @@ with col_left:
         if input_method == "Upload .wav File":
             uploaded_wav = st.file_uploader("Upload clean 5–15 second speaker clip", type=["wav"])
             if uploaded_wav is not None:
-                # FIX: Use getvalue() instead of read() so bytes persist across Streamlit reruns
                 voice_bytes = uploaded_wav.getvalue()
                 st.audio(voice_bytes, format="audio/wav")
         else:
@@ -108,13 +126,12 @@ with col_left:
     timeline_items = []
 
     if uploaded_script is not None:
-        # FIX: Use getvalue() so script text persists across Streamlit reruns
         raw_script_text = uploaded_script.getvalue().decode("utf-8")
         try:
             script_ref, timeline_items = parse_presentation_script(raw_script_text)
             if not parsed_ref:
                 parsed_ref = script_ref
-            st.success(f"Validated {len(timeline_items)} timestamped segments.")
+            st.success(f"Validated {len(timeline_items)} speech chunks across your timeline.")
         except ValueError as err:
             st.error(f"Script Format Error: {err}")
 
@@ -130,6 +147,8 @@ with col_left:
 
 with col_right:
     st.subheader("3. Master Timeline Output")
+    st.info(f"**Active Profile:** {selected_accent} (Speed: `{speech_speed}x`)")
+
     if run_btn:
         if not consent_ok:
             st.error("Please confirm voice authorization before generating.")
@@ -151,11 +170,17 @@ with col_right:
                     total = len(timeline_items)
 
                     for idx, (ts_ms, text_line) in enumerate(timeline_items):
-                        progress.progress(idx / total, text=f"Synthesizing segment {idx + 1} of {total}...")
+                        progress.progress(idx / total, text=f"Synthesizing chunk {idx + 1} of {total}...")
                         seg_path = os.path.join(session_dir, f"seg_{idx}.wav")
 
                         if engine_choice == "Zero-Shot Voice Cloning (F5-TTS)":
-                            tts_engine.clone_segment(norm_ref_path, ref_text.strip(), text_line, seg_path)
+                            tts_engine.clone_segment(
+                                norm_ref_path,
+                                ref_text.strip(),
+                                text_line,
+                                seg_path,
+                                speed=speech_speed,
+                            )
                         else:
                             synthesize_preset_groq(text_line, preset_voice, groq_api_key, seg_path)
 
@@ -165,7 +190,12 @@ with col_right:
                     final_wav = stitch_timeline_segments(stitched_inputs)
                     progress.progress(1.0, text="Complete!")
 
-                log_generation_event(active_user, f"{operation_mode} | {engine_choice}", len(timeline_items), "SUCCESS")
+                log_generation_event(
+                    active_user,
+                    f"{operation_mode} | {selected_accent} | {engine_choice}",
+                    len(timeline_items),
+                    "SUCCESS",
+                )
                 st.success("Master presentation audio generated!")
                 st.audio(final_wav, format="audio/wav")
                 st.download_button(
