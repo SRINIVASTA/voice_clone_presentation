@@ -31,6 +31,7 @@ with st.sidebar:
     use_api_mode = operation_mode.startswith("With API")
     hf_token = None
     groq_api_key = None
+    backend_type = "Public HF Cloud Spaces (No Key Needed)"
 
     if use_api_mode:
         st.subheader("🔑 API Credentials")
@@ -51,9 +52,11 @@ with st.sidebar:
             "No-API Backend Engine",
             [
                 "Public HF Cloud Spaces (No Key Needed)",
-                "Local Python F5-TTS Engine (Offline CPU/GPU)",
+                "Local Python F5-TTS Engine (Requires Local GPU/High RAM)",
             ],
         )
+        if backend_type.startswith("Local Python"):
+            st.warning("⚠️ Local mode requires 8GB+ RAM. Use Public HF Cloud Spaces on Streamlit Cloud.")
 
     groq_enabled = use_api_mode and is_groq_available(groq_api_key)
 
@@ -79,14 +82,15 @@ with col_left:
         input_method = st.radio("Audio Source", ["Upload .wav File", "Record Microphone"], horizontal=True)
 
         if input_method == "Upload .wav File":
-            uploaded_wav = st.file_uploader("Upload clean 5–10 second speaker clip", type=["wav"])
-            if uploaded_wav:
-                voice_bytes = uploaded_wav.read()
+            uploaded_wav = st.file_uploader("Upload clean 5–15 second speaker clip", type=["wav"])
+            if uploaded_wav is not None:
+                # FIX: Use getvalue() instead of read() so bytes persist across Streamlit reruns
+                voice_bytes = uploaded_wav.getvalue()
                 st.audio(voice_bytes, format="audio/wav")
         else:
-            mic_audio = st.audio_input("Record 5–10 seconds of clear speech")
-            if mic_audio:
-                voice_bytes = mic_audio.read()
+            mic_audio = st.audio_input("Record 5–15 seconds of clear speech")
+            if mic_audio is not None:
+                voice_bytes = mic_audio.getvalue()
 
         if groq_enabled and voice_bytes:
             if st.button("✨ Auto-Transcribe Reference Audio (Groq Whisper)"):
@@ -103,8 +107,9 @@ with col_left:
     parsed_ref = st.session_state.get("auto_ref_text", "")
     timeline_items = []
 
-    if uploaded_script:
-        raw_script_text = uploaded_script.read().decode("utf-8")
+    if uploaded_script is not None:
+        # FIX: Use getvalue() so script text persists across Streamlit reruns
+        raw_script_text = uploaded_script.getvalue().decode("utf-8")
         try:
             script_ref, timeline_items = parse_presentation_script(raw_script_text)
             if not parsed_ref:
