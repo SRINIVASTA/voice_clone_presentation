@@ -12,31 +12,63 @@ from src.audit_logger import log_generation_event
 st.set_page_config(page_title="Enterprise Voice Presentation Studio", page_icon="🎙️", layout="wide")
 
 active_user = enforce_enterprise_auth()
-hf_token = st.secrets.get("HF_TOKEN", None)
-groq_api_key = st.secrets.get("GROQ_API_KEY", None)
-groq_enabled = is_groq_available(groq_api_key)
+secret_hf_token = st.secrets.get("HF_TOKEN", "")
+secret_groq_key = st.secrets.get("GROQ_API_KEY", "")
 
 st.title("🎙️ Enterprise AI Voice Cloning Presentation Studio")
-st.caption("Zero-shot voice cloning and timestamp-synchronized presentation audio engine.")
+st.caption("Hybrid zero-shot voice cloning supporting both No-API and API-accelerated execution.")
 
 with st.sidebar:
-    st.header("⚙️ Engine Configuration")
-    if groq_enabled:
-        st.success("Groq Acceleration: **Active** (Auto-Transcribe + Preset TTS)")
-        engine_choice = st.radio(
-            "Synthesis Mode",
-            ["Zero-Shot Voice Cloning (F5-TTS)", "Ultra-Fast Preset Voice (Groq)"],
+    st.header("⚙️ Execution Mode")
+    operation_mode = st.radio(
+        "Choose Architecture Mode:",
+        [
+            "Without API (Free Public / Local Mode)",
+            "With API (Enterprise Keys & Groq)",
+        ],
+    )
+
+    use_api_mode = operation_mode.startswith("With API")
+    hf_token = None
+    groq_api_key = None
+
+    if use_api_mode:
+        st.subheader("🔑 API Credentials")
+        hf_token = st.text_input(
+            "Hugging Face Token (Optional)",
+            value=secret_hf_token,
+            type="password",
+            help="Authenticates private F5-TTS Spaces and avoids public rate limits.",
+        )
+        groq_api_key = st.text_input(
+            "Groq API Key (Optional)",
+            value=secret_groq_key,
+            type="password",
+            help="Unlocks Whisper auto-transcription and instant preset voices.",
         )
     else:
-        st.info("Running in **Pure F5-TTS Mode** (No Groq key required)")
-        engine_choice = "Zero-Shot Voice Cloning (F5-TTS)"
-
-    preset_voice = "Fritz-PlayAI"
-    if engine_choice == "Ultra-Fast Preset Voice (Groq)":
-        preset_voice = st.selectbox(
-            "Select Groq Preset Voice",
-            ["Fritz-PlayAI", "Arista-PlayAI", "Atlas-PlayAI", "Celeste-PlayAI", "Mason-PlayAI"],
+        backend_type = st.selectbox(
+            "No-API Backend Engine",
+            [
+                "Public HF Cloud Spaces (No Key Needed)",
+                "Local Python F5-TTS Engine (Offline CPU/GPU)",
+            ],
         )
+
+    groq_enabled = use_api_mode and is_groq_available(groq_api_key)
+
+    engine_choice = "Zero-Shot Voice Cloning (F5-TTS)"
+    preset_voice = "Fritz-PlayAI"
+    if groq_enabled:
+        engine_choice = st.radio(
+            "Synthesis Engine",
+            ["Zero-Shot Voice Cloning (F5-TTS)", "Ultra-Fast Preset Voice (Groq)"],
+        )
+        if engine_choice == "Ultra-Fast Preset Voice (Groq)":
+            preset_voice = st.selectbox(
+                "Select Groq Preset Voice",
+                ["Fritz-PlayAI", "Arista-PlayAI", "Atlas-PlayAI", "Celeste-PlayAI", "Mason-PlayAI"],
+            )
 
 col_left, col_right = st.columns([1.1, 0.9], gap="large")
 
@@ -60,8 +92,7 @@ with col_left:
             if st.button("✨ Auto-Transcribe Reference Audio (Groq Whisper)"):
                 with st.spinner("Transcribing reference voice..."):
                     try:
-                        auto_transcript = transcribe_reference_wav(voice_bytes, groq_api_key)
-                        st.session_state["auto_ref_text"] = auto_transcript
+                        st.session_state["auto_ref_text"] = transcribe_reference_wav(voice_bytes, groq_api_key)
                         st.success("Transcript extracted!")
                     except Exception as exc:
                         st.error(f"Transcription failed: {exc}")
@@ -107,8 +138,9 @@ with col_right:
                 with tempfile.TemporaryDirectory() as session_dir:
                     norm_ref_path = os.path.join(session_dir, "norm_ref.wav")
                     if engine_choice == "Zero-Shot Voice Cloning (F5-TTS)":
-                        normalize_reference_audio(voice_bytes, norm_ref_path)
-                        tts_engine = F5TTSClient(hf_token=hf_token)
+                        normalize_reference_audio(voice_bytes, norm_ref_path, max_duration_ms=15000)
+                        use_remote_api = use_api_mode or (backend_type == "Public HF Cloud Spaces (No Key Needed)")
+                        tts_engine = F5TTSClient(use_api=use_remote_api, hf_token=hf_token)
 
                     stitched_inputs = []
                     total = len(timeline_items)
@@ -128,7 +160,7 @@ with col_right:
                     final_wav = stitch_timeline_segments(stitched_inputs)
                     progress.progress(1.0, text="Complete!")
 
-                log_generation_event(active_user, engine_choice, len(timeline_items), "SUCCESS")
+                log_generation_event(active_user, f"{operation_mode} | {engine_choice}", len(timeline_items), "SUCCESS")
                 st.success("Master presentation audio generated!")
                 st.audio(final_wav, format="audio/wav")
                 st.download_button(
@@ -139,5 +171,5 @@ with col_right:
                     use_container_width=True,
                 )
             except Exception as exc:
-                log_generation_event(active_user, engine_choice, len(timeline_items), "FAILED", str(exc))
+                log_generation_event(active_user, operation_mode, len(timeline_items), "FAILED", str(exc))
                 st.error(f"Synthesis failed: {exc}")
