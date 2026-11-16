@@ -1,6 +1,7 @@
 import asyncio
 import concurrent.futures
 import os
+import re
 import shutil
 import time
 from typing import List, Optional
@@ -65,24 +66,42 @@ def _extract_audio_path(result) -> Optional[str]:
 
 
 def _synthesize_edge_fallback(gen_text: str, accent_label: str, dest_wav_path: str) -> str:
-    """Zero-key regional neural TTS fallback when public F5-TTS Spaces are offline."""
+    """Zero-key regional neural TTS fallback with 3x retry resilience against rate limits."""
     import edge_tts
+    from pydub import AudioSegment
 
-    voice = EDGE_VOICE_MAP.get(accent_label, "en-IN-PrabhatNeural")
+    clean_text = re.sub(r"\s+", " ", gen_text).strip()
+    if not clean_text:
+        clean_text = "."
+
+    primary_voice = EDGE_VOICE_MAP.get(accent_label, "en-IN-PrabhatNeural")
+    fallback_voices = [primary_voice, "en-IN-NeerjaNeural", "en-US-JennyNeural"]
     temp_mp3 = f"{dest_wav_path}.mp3"
 
-    async def _run():
-        communicate = edge_tts.Communicate(gen_text, voice)
-        await communicate.save(temp_mp3)
+    last_err = None
+    for attempt in range(3):
+        voice_to_use = fallback_voices[attempt % len(fallback_voices)]
+        try:
+            # Small pacing pause to avoid rapid-fire burst throttling on chunk 6+
+            time.sleep(0.5 + (attempt * 1.0))
 
-    asyncio.run(_run())
-    # Convert MP3 to WAV via pydub so stitch_timeline_to_disk processes it seamlessly
-    from pydub import AudioSegment
-    sound = AudioSegment.from_mp3(temp_mp3)
-    sound.export(dest_wav_path, format="wav")
-    if os.path.exists(temp_mp3):
-        os.remove(temp_mp3)
-    return dest_wav_path
+            async def _run():
+                communicate = edge_tts.Communicate(clean_text, voice_to_use)
+                await communicate.save(temp_mp3)
+
+            asyncio.run(_run())
+
+            if os.path.exists(temp_mp3) and os.path.getsize(temp_mp3) > 100:
+                sound = AudioSegment.from_mp3(temp_mp3)
+                sound.export(dest_wav_path, format="wav")
+                os.remove(temp_mp3)
+                return dest_wav_path
+        except Exception as exc:
+            last_err = exc
+            if os.path.exists(temp_mp3):
+                os.remove(temp_mp3)
+
+    raise RuntimeError(f"Regional neural TTS failed after 3 retries: {last_err}")
 
 
 class F5TTSClient:
@@ -219,7 +238,6 @@ class F5TTSClient:
                 self._active_client = None
                 time.sleep(0.5)
 
-        # If all public F5-TTS Spaces are down/offline, fall back automatically to zero-key regional neural TTS
         if self.allow_fallback:
             self._fallback_triggered = True
             return _synthesize_edge_fallback(gen_text, self.accent_label, dest_wav_path)
