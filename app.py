@@ -96,38 +96,37 @@ is_edge_mode = selected_mode.startswith("3.")
 col_left, col_right = st.columns([1.05, 0.95], gap="large")
 
 with col_left:
-    if is_cloning_mode:
-        st.subheader("1. Reference Voice Sample (.wav)")
-        input_method = st.radio("Audio Source", ["Upload .wav File", "Record Microphone"], horizontal=True)
+    st.subheader("1. Reference Voice Sample (.wav)")
+    if not is_cloning_mode:
+        st.caption("Optional in Preset / Regional modes (required for Option 1 Zero-Shot Voice Cloning).")
 
-        if input_method == "Upload .wav File":
-            uploaded_wav = st.file_uploader("Upload clean 5–12 second speaker clip", type=["wav"])
-            if uploaded_wav is not None:
-                wav_data = uploaded_wav.getvalue()
-                if wav_data:
-                    st.session_state["voice_bytes"] = wav_data
-        else:
-            mic_audio = st.audio_input("Record 5–12 seconds of clear speech")
-            if mic_audio is not None:
-                mic_data = mic_audio.getvalue()
-                if mic_data:
-                    st.session_state["voice_bytes"] = mic_data
+    input_method = st.radio("Audio Source", ["Upload .wav File", "Record Microphone"], horizontal=True)
 
-        voice_bytes = st.session_state.get("voice_bytes", None)
-        if voice_bytes:
-            st.audio(voice_bytes, format="audio/wav")
-
-        if groq_enabled and voice_bytes:
-            if st.button("✨ Auto-Transcribe Reference Audio (Groq Whisper)"):
-                with st.spinner("Transcribing reference voice..."):
-                    try:
-                        st.session_state["auto_ref_text"] = transcribe_reference_wav(voice_bytes, groq_api_key)
-                        st.success("Transcript extracted!")
-                    except Exception as exc:
-                        st.error(f"Transcription failed: {exc}")
+    if input_method == "Upload .wav File":
+        uploaded_wav = st.file_uploader("Upload clean 5–12 second speaker clip", type=["wav"])
+        if uploaded_wav is not None:
+            wav_data = uploaded_wav.getvalue()
+            if wav_data:
+                st.session_state["voice_bytes"] = wav_data
     else:
-        voice_bytes = None
-        st.info(f"ℹ️ **{selected_mode}** does not require a reference `.wav` sample.")
+        mic_audio = st.audio_input("Record 5–12 seconds of clear speech")
+        if mic_audio is not None:
+            mic_data = mic_audio.getvalue()
+            if mic_data:
+                st.session_state["voice_bytes"] = mic_data
+
+    voice_bytes = st.session_state.get("voice_bytes", None)
+    if voice_bytes:
+        st.audio(voice_bytes, format="audio/wav")
+
+    if groq_enabled and voice_bytes:
+        if st.button("✨ Auto-Transcribe Reference Audio (Groq Whisper)"):
+            with st.spinner("Transcribing reference voice..."):
+                try:
+                    st.session_state["auto_ref_text"] = transcribe_reference_wav(voice_bytes, groq_api_key)
+                    st.success("Transcript extracted!")
+                except Exception as exc:
+                    st.error(f"Transcription failed: {exc}")
 
     st.subheader("2. Presentation Script (.txt)")
     uploaded_script = st.file_uploader("Upload [MM:SS] timestamped script", type=["txt"])
@@ -145,12 +144,10 @@ with col_left:
         except ValueError as err:
             st.error(f"Script Format Error: {err}")
 
-    ref_text = ""
-    if is_cloning_mode:
-        ref_text = st.text_input(
-            "Reference Transcript (Must match exact words spoken in the reference clip)",
-            value=parsed_ref,
-        )
+    ref_text = st.text_input(
+        "Reference Transcript (Must match exact words spoken in the reference clip for Option 1)",
+        value=parsed_ref,
+    )
 
     consent_ok = st.checkbox("I confirm I own or have explicit authorization to generate this audio.")
     run_btn = st.button("🚀 Generate Chunk-by-Chunk & Combine", type="primary", use_container_width=True)
@@ -177,8 +174,10 @@ with col_right:
             try:
                 with tempfile.TemporaryDirectory() as session_dir:
                     norm_ref_path = os.path.join(session_dir, "norm_ref.wav")
-                    if is_cloning_mode:
+                    if active_voice_bytes:
                         normalize_reference_audio(active_voice_bytes, norm_ref_path, max_duration_ms=12000)
+
+                    if is_cloning_mode:
                         tts_engine = F5TTSClient(hf_token=hf_token, custom_space=custom_hf_space)
 
                     stitched_inputs = []
@@ -212,7 +211,7 @@ with col_right:
                     master_wav_path = os.path.join(session_dir, "master_presentation.wav")
                     stitch_timeline_to_disk(stitched_inputs, master_wav_path)
 
-                    if is_cloning_mode and os.path.exists(norm_ref_path):
+                    if active_voice_bytes and os.path.exists(norm_ref_path):
                         progress.progress(0.97, text="Verifying acoustic speaker similarity...")
                         similarity_score = compute_voice_similarity(norm_ref_path, master_wav_path)
 
@@ -232,16 +231,16 @@ with col_right:
 
                 st.success(f"All {total} chunks synthesized and combined!")
 
-                if is_cloning_mode and similarity_score is not None:
+                if similarity_score is not None:
                     m1, m2 = st.columns(2)
                     m1.metric(
                         label="🎯 Acoustic Voice Match",
                         value=f"{similarity_score}%",
-                        delta="Verified Zero-Shot Clone",
+                        delta="Verified Zero-Shot Clone" if is_cloning_mode else "Comparison vs Uploaded WAV",
                     )
                     m2.metric(
-                        label="🔊 Cloned Via Space",
-                        value=str(active_space_used),
+                        label="🔊 Active Engine",
+                        value=str(active_space_used) if is_cloning_mode else selected_mode,
                     )
 
                 st.audio(final_wav_bytes, format="audio/wav")
