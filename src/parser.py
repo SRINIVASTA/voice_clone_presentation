@@ -13,8 +13,25 @@ def parse_time_ms(time_str: str) -> int:
     return (minutes * 60 + seconds) * 1000
 
 
+def _split_into_short_sentences(text: str, max_chars: int = 140) -> List[str]:
+    """Splits long paragraphs into natural sentence chunks so F5-TTS never drops words."""
+    raw_sentences = re.split(r"(?<=[.!?])\s+", text.strip())
+    chunks: List[str] = []
+    for sentence in raw_sentences:
+        sentence = sentence.strip()
+        if not sentence:
+            continue
+        if len(sentence) <= max_chars:
+            chunks.append(sentence)
+        else:
+            # Split long sentences on commas if needed
+            sub_parts = [p.strip() for p in sentence.split(",") if p.strip()]
+            chunks.extend(sub_parts)
+    return chunks
+
+
 def parse_presentation_script(raw_text: str) -> Tuple[str, List[Tuple[int, str]]]:
-    """Extracts optional Reference Text and sequential [MM:SS] speech segments."""
+    """Extracts Reference Text and splits [MM:SS] blocks into short, clean speech chunks."""
     if not raw_text or not raw_text.strip():
         return "", []
 
@@ -26,16 +43,20 @@ def parse_presentation_script(raw_text: str) -> Tuple[str, List[Tuple[int, str]]
 
     for i in range(0, len(segments), 2):
         timestamp_ms = parse_time_ms(segments[i])
-        speech_text = segments[i + 1].strip()
-        if speech_text:
-            timeline_items.append((timestamp_ms, speech_text))
+        speech_block = segments[i + 1].strip()
+        if not speech_block:
+            continue
 
-    timeline_items.sort(key=lambda item: item[0])
+        short_chunks = _split_into_short_sentences(speech_block)
+        for idx, chunk in enumerate(short_chunks):
+            # First chunk anchors at the exact [MM:SS] timestamp; subsequent chunks follow naturally
+            chunk_ts = timestamp_ms if idx == 0 else 0
+            timeline_items.append((chunk_ts, chunk))
 
     if ref_match and ref_match.group(1).strip():
         ref_text = ref_match.group(1).strip()
     elif timeline_items:
-        ref_text = timeline_items[0][1]
+        ref_text = timeline_items
     else:
         ref_text = ""
 
