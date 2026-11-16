@@ -1,10 +1,11 @@
+import gc
 import os
 import tempfile
 import streamlit as st
 
 from src.auth import enforce_enterprise_auth
 from src.parser import parse_presentation_script
-from src.audio_processor import normalize_reference_audio, stitch_timeline_segments
+from src.audio_processor import normalize_reference_audio, stitch_timeline_to_disk
 from src.tts_client import F5TTSClient
 from src.groq_helper import is_groq_available, transcribe_reference_wav, synthesize_preset_groq
 from src.audit_logger import log_generation_event
@@ -24,14 +25,14 @@ ACCENT_PROFILES = {
 }
 
 st.title("🎙️ Enterprise AI Voice Cloning Presentation Studio")
-st.caption("Hybrid zero-shot voice cloning supporting both No-API and API-accelerated execution.")
+st.caption("Memory-optimized chunk-by-chunk voice cloning and timeline stitching engine.")
 
 with st.sidebar:
     st.header("⚙️ Execution Mode")
     operation_mode = st.radio(
         "Choose Architecture Mode:",
         [
-            "Without API (Free Public / Local Mode)",
+            "Without API (Free Public Cloud Spaces)",
             "With API (Enterprise Keys & Groq)",
         ],
     )
@@ -39,7 +40,6 @@ with st.sidebar:
     use_api_mode = operation_mode.startswith("With API")
     hf_token = None
     groq_api_key = None
-    backend_type = "Public HF Cloud Spaces (No Key Needed)"
 
     if use_api_mode:
         st.subheader("🔑 API Credentials")
@@ -55,16 +55,6 @@ with st.sidebar:
             type="password",
             help="Unlocks Whisper auto-transcription and instant preset voices.",
         )
-    else:
-        backend_type = st.selectbox(
-            "No-API Backend Engine",
-            [
-                "Public HF Cloud Spaces (No Key Needed)",
-                "Local Python F5-TTS Engine (Requires Local GPU/High RAM)",
-            ],
-        )
-        if backend_type.startswith("Local Python"):
-            st.warning("⚠️ Local mode requires 8GB+ RAM. Use Public HF Cloud Spaces on Streamlit Cloud.")
 
     st.divider()
     st.subheader("🌍 Language & Accent Profile")
@@ -72,7 +62,6 @@ with st.sidebar:
         "Select Output Dialect & Cadence",
         list(ACCENT_PROFILES.keys()),
         index=0,
-        help="Optimizes speaking cadence and clarity for your target English dialect.",
     )
     speech_speed = ACCENT_PROFILES[selected_accent]
 
@@ -92,7 +81,7 @@ with st.sidebar:
                 ["Fritz-PlayAI", "Arista-PlayAI", "Atlas-PlayAI", "Celeste-PlayAI", "Mason-PlayAI"],
             )
 
-col_left, col_right = st.columns([1.1, 0.9], gap="large")
+col_left, col_right = st.columns([1.05, 0.95], gap="large")
 
 with col_left:
     if engine_choice == "Zero-Shot Voice Cloning (F5-TTS)":
@@ -100,13 +89,13 @@ with col_left:
         input_method = st.radio("Audio Source", ["Upload .wav File", "Record Microphone"], horizontal=True)
 
         if input_method == "Upload .wav File":
-            uploaded_wav = st.file_uploader("Upload clean 5–15 second speaker clip", type=["wav"])
+            uploaded_wav = st.file_uploader("Upload clean 5–12 second speaker clip", type=["wav"])
             if uploaded_wav is not None:
                 wav_data = uploaded_wav.getvalue()
                 if wav_data:
                     st.session_state["voice_bytes"] = wav_data
         else:
-            mic_audio = st.audio_input("Record 5–15 seconds of clear speech")
+            mic_audio = st.audio_input("Record 5–12 seconds of clear speech")
             if mic_audio is not None:
                 mic_data = mic_audio.getvalue()
                 if mic_data:
@@ -139,7 +128,7 @@ with col_left:
             script_ref, timeline_items = parse_presentation_script(raw_script_text)
             if not parsed_ref:
                 parsed_ref = script_ref
-            st.success(f"Validated {len(timeline_items)} speech chunks across your timeline.")
+            st.success(f"Validated {len(timeline_items)} sequential speech chunks.")
         except ValueError as err:
             st.error(f"Script Format Error: {err}")
 
@@ -151,10 +140,10 @@ with col_left:
         )
 
     consent_ok = st.checkbox("I confirm I own or have explicit authorization to synthesize this voice.")
-    run_btn = st.button("🚀 Generate Presentation Audio", type="primary", use_container_width=True)
+    run_btn = st.button("🚀 Generate Chunk-by-Chunk & Combine", type="primary", use_container_width=True)
 
 with col_right:
-    st.subheader("3. Master Timeline Output")
+    st.subheader("3. Live Chunk-by-Chunk & Combined Output")
     st.info(f"**Active Profile:** {selected_accent} (Speed: `{speech_speed}x`)")
 
     if run_btn:
@@ -166,20 +155,22 @@ with col_right:
         elif engine_choice == "Zero-Shot Voice Cloning (F5-TTS)" and (not active_voice_bytes or not ref_text.strip()):
             st.warning("Please provide both a reference .wav clip and its exact reference text.")
         else:
-            progress = st.progress(0, text="Initializing isolated session workspace...")
+            progress = st.progress(0, text="Preparing low-memory disk workspace...")
+            chunk_feed = st.container()
+
             try:
                 with tempfile.TemporaryDirectory() as session_dir:
                     norm_ref_path = os.path.join(session_dir, "norm_ref.wav")
                     if engine_choice == "Zero-Shot Voice Cloning (F5-TTS)":
-                        normalize_reference_audio(active_voice_bytes, norm_ref_path, max_duration_ms=15000)
-                        use_remote_api = use_api_mode or (backend_type == "Public HF Cloud Spaces (No Key Needed)")
-                        tts_engine = F5TTSClient(use_api=use_remote_api, hf_token=hf_token)
+                        normalize_reference_audio(active_voice_bytes, norm_ref_path, max_duration_ms=12000)
+                        tts_engine = F5TTSClient(use_api=True, hf_token=hf_token)
 
                     stitched_inputs = []
                     total = len(timeline_items)
 
+                    # Process strictly ONE chunk at a time, flush to disk, and free RAM
                     for idx, (ts_ms, text_line) in enumerate(timeline_items):
-                        progress.progress(idx / total, text=f"Synthesizing chunk {idx + 1} of {total}...")
+                        progress.progress(idx / total, text=f"Generating chunk {idx + 1} of {total}...")
                         seg_path = os.path.join(session_dir, f"seg_{idx}.wav")
 
                         if engine_choice == "Zero-Shot Voice Cloning (F5-TTS)":
@@ -193,11 +184,23 @@ with col_right:
                         else:
                             synthesize_preset_groq(text_line, preset_voice, groq_api_key, seg_path)
 
-                        stitched_inputs.append((ts_ms, seg_path))
+                        # Show immediate chunk preview in UI while keeping RAM low
+                        with chunk_feed.expander(f"✅ Chunk {idx + 1}/{total}: {text_line[:55]}...", expanded=False):
+                            with open(seg_path, "rb") as f_seg:
+                                st.audio(f_seg.read(), format="audio/wav")
 
-                    progress.progress(0.95, text="Stitching master presentation timeline...")
-                    final_wav = stitch_timeline_segments(stitched_inputs)
+                        stitched_inputs.append((ts_ms, seg_path))
+                        gc.collect()
+
+                    progress.progress(0.95, text="Combining all chunks on disk into master presentation...")
+                    master_wav_path = os.path.join(session_dir, "master_presentation.wav")
+                    stitch_timeline_to_disk(stitched_inputs, master_wav_path)
+
+                    with open(master_wav_path, "rb") as f_master:
+                        final_wav_bytes = f_master.read()
+
                     progress.progress(1.0, text="Complete!")
+                    gc.collect()
 
                 log_generation_event(
                     active_user,
@@ -205,15 +208,16 @@ with col_right:
                     len(timeline_items),
                     "SUCCESS",
                 )
-                st.success("Master presentation audio generated!")
-                st.audio(final_wav, format="audio/wav")
+                st.success(f"All {total} chunks combined into your master presentation!")
+                st.audio(final_wav_bytes, format="audio/wav")
                 st.download_button(
-                    label="⬇️ Download Master Presentation (.wav)",
-                    data=final_wav,
+                    label="⬇️ Download Combined Master Presentation (.wav)",
+                    data=final_wav_bytes,
                     file_name="enterprise_presentation_master.wav",
                     mime="audio/wav",
                     use_container_width=True,
                 )
             except Exception as exc:
+                gc.collect()
                 log_generation_event(active_user, operation_mode, len(timeline_items), "FAILED", str(exc))
                 st.error(f"Synthesis failed: {exc}")
