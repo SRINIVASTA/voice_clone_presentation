@@ -14,7 +14,7 @@ class F5TTSClient:
     """Fault-tolerant F5-TTS voice cloning client with retry backoff and Space failover."""
 
     def __init__(self, hf_token: Optional[str] = None, custom_space: Optional[str] = None):
-        self.hf_token = hf_token
+        self.hf_token = hf_token if hf_token and hf_token.strip() else None
         self.spaces = ([custom_space] if custom_space else []) + FALLBACK_SPACES
 
     def clone_segment(self, ref_wav_path: str, ref_text: str, gen_text: str, dest_wav_path: str) -> str:
@@ -22,7 +22,8 @@ class F5TTSClient:
         for space_id in self.spaces:
             for attempt in range(3):
                 try:
-                    client = Client(space_id, hf_token=self.hf_token)
+                    # Updated for gradio_client >= 1.0: uses 'token' instead of 'hf_token'
+                    client = Client(space_id, token=self.hf_token)
                     result = client.predict(
                         ref_audio_input=handle_file(ref_wav_path),
                         ref_text_input=ref_text,
