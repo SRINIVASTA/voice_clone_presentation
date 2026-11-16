@@ -1,6 +1,8 @@
 import gc
 import io
+import math
 import os
+import struct
 import wave
 from typing import List, Tuple
 from pydub import AudioSegment, effects
@@ -69,3 +71,46 @@ def stitch_timeline_to_disk(timed_audio_paths: List[Tuple[int, str]], output_wav
             gc.collect()
 
     return output_wav_path
+
+
+def _extract_acoustic_profile(wav_path: str) -> List[float]:
+    """Extracts a lightweight 16-band energy & zero-crossing vocal signature using pure Python."""
+    if not os.path.exists(wav_path):
+        return [0.0] * 16
+
+    with wave.open(wav_path, "rb") as wf:
+        raw = wf.readframes(wf.getnframes())
+        total_samples = len(raw) // 2
+        if total_samples < 500:
+            return [0.0] * 16
+        # Read up to 48,000 samples (2 seconds of active audio) to keep RAM minimal
+        sample_count = min(total_samples, 48000)
+        samples = struct.unpack(f"<{sample_count}h", raw[: sample_count * 2])
+
+    # Filter out silent frames
+    voiced = [s for s in samples if abs(s) > 300]
+    if len(voiced) < 256:
+        return [0.0] * 16
+
+    # Split voiced signal into 16 segments and compute RMS energy + zero-crossing density
+    step = len(voiced) // 16
+    profile: List[float] = []
+    for i in range(16):
+        chunk = voiced[i * step : (i + 1) * step]
+        rms = math.sqrt(sum(x * x for x in chunk) / len(chunk))
+        zcr = sum(1 for j in range(1, len(chunk)) if (chunk[j - 1] >= 0) != (chunk[j] >= 0)) / len(chunk)
+        profile.append(math.log1p(rms) * (1.0 + zcr * 5.0))
+
+    norm = math.sqrt(sum(v * v for v in profile))
+    return [v / norm for v in profile] if norm > 0 else profile
+
+
+def compute_voice_similarity(ref_wav_path: str, gen_wav_path: str) -> float:
+    """Returns a 0-100% cosine similarity score comparing reference and generated vocal signatures."""
+    p_ref = _extract_acoustic_profile(ref_wav_path)
+    p_gen = _extract_acoustic_profile(gen_wav_path)
+
+    dot = sum(a * b for a, b in zip(p_ref, p_gen))
+    # Map raw cosine similarity [0.75, 1.0] into an intuitive [0%, 100%] scale
+    scaled = max(0.0, min(100.0, ((dot - 0.75) / 0.25) * 100.0))
+    return round(scaled, 1)
