@@ -12,7 +12,6 @@ from huggingface_hub import HfApi
 SEED_SPACES = [
     "mrfakename/E2-F5-TTS",
     "mrfakename/F5-TTS",
-    "SWivid/F5-TTS-Demo",
 ]
 
 EDGE_VOICE_MAP = {
@@ -23,7 +22,7 @@ EDGE_VOICE_MAP = {
     "🌐 Neutral / Slower Presentation Pace": "en-IN-NeerjaNeural",
 }
 
-REQUEST_TIMEOUT_SECONDS = 40
+REQUEST_TIMEOUT_SECONDS = 60
 
 
 @st.cache_data(ttl=180, show_spinner=False)
@@ -65,15 +64,12 @@ def _extract_audio_path(result) -> Optional[str]:
     return None
 
 
-def _synthesize_edge_fallback(gen_text: str, accent_label: str, dest_wav_path: str) -> str:
-    """Zero-key regional neural TTS fallback with 3x retry resilience against rate limits."""
+def synthesize_regional_neural(gen_text: str, accent_label: str, dest_wav_path: str) -> str:
+    """Dedicated Option 3: Zero-key regional neural TTS with 3x retry resilience."""
     import edge_tts
     from pydub import AudioSegment
 
-    clean_text = re.sub(r"\s+", " ", gen_text).strip()
-    if not clean_text:
-        clean_text = "."
-
+    clean_text = re.sub(r"\s+", " ", gen_text).strip() or "."
     primary_voice = EDGE_VOICE_MAP.get(accent_label, "en-IN-PrabhatNeural")
     fallback_voices = [primary_voice, "en-IN-NeerjaNeural", "en-US-JennyNeural"]
     temp_mp3 = f"{dest_wav_path}.mp3"
@@ -82,7 +78,7 @@ def _synthesize_edge_fallback(gen_text: str, accent_label: str, dest_wav_path: s
     for attempt in range(3):
         voice_to_use = fallback_voices[attempt % len(fallback_voices)]
         try:
-            time.sleep(0.5 + (attempt * 1.0))
+            time.sleep(0.4 + (attempt * 0.8))
 
             async def _run():
                 communicate = edge_tts.Communicate(clean_text, voice_to_use)
@@ -104,39 +100,18 @@ def _synthesize_edge_fallback(gen_text: str, accent_label: str, dest_wav_path: s
 
 
 class F5TTSClient:
-    """Self-healing F5-TTS client supporting custom private Spaces, live discovery, and regional fallback."""
+    """Dedicated Option 1: Strict zero-shot voice cloning via F5-TTS Spaces."""
 
-    def __init__(
-        self,
-        use_api: bool = True,
-        hf_token: Optional[str] = None,
-        custom_space: Optional[str] = None,
-        accent_label: str = "🇮🇳 India (English) — Clear Cadence",
-        allow_fallback: bool = True,
-    ):
-        self.use_api = use_api
+    def __init__(self, hf_token: Optional[str] = None, custom_space: Optional[str] = None):
         self.hf_token = hf_token.strip() if (hf_token and hf_token.strip()) else None
-        self.accent_label = accent_label
-        self.allow_fallback = allow_fallback
-        live_spaces = _discover_running_f5_spaces(self.hf_token)
         clean_custom = custom_space.strip() if (custom_space and custom_space.strip()) else None
-        self.spaces = ([clean_custom] if clean_custom else []) + [s for s in live_spaces if s != clean_custom]
+        if clean_custom:
+            # If user specifies their own Space (e.g. SRINIVASTA/f5-tts-cloner), target ONLY that Space
+            self.spaces = [clean_custom]
+        else:
+            self.spaces = _discover_running_f5_spaces(self.hf_token)
         self._active_client: Optional[Client] = None
         self._active_space: Optional[str] = None
-        self._fallback_triggered = False
-        self.last_space_error: str = ""
-
-    def clone_segment(
-        self,
-        ref_wav_path: str,
-        ref_text: str,
-        gen_text: str,
-        dest_wav_path: str,
-        speed: float = 0.92,
-    ) -> str:
-        if self._fallback_triggered:
-            return _synthesize_edge_fallback(gen_text, self.accent_label, dest_wav_path)
-        return self._clone_via_api(ref_wav_path, ref_text, gen_text, dest_wav_path, speed=speed)
 
     def _connect_with_timeout(self, space_id: str) -> Client:
         def _init_client():
@@ -144,7 +119,7 @@ class F5TTSClient:
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
             future = pool.submit(_init_client)
-            return future.result(timeout=20)
+            return future.result(timeout=25)
 
     def _predict_schema_aware(
         self,
@@ -206,7 +181,7 @@ class F5TTSClient:
             )
             return future.result(timeout=REQUEST_TIMEOUT_SECONDS)
 
-    def _clone_via_api(
+    def clone_segment(
         self,
         ref_wav_path: str,
         ref_text: str,
@@ -239,9 +214,8 @@ class F5TTSClient:
                 self._active_client = None
                 time.sleep(0.5)
 
-        self.last_space_error = str(last_error)
-        if self.allow_fallback:
-            self._fallback_triggered = True
-            return _synthesize_edge_fallback(gen_text, self.accent_label, dest_wav_path)
-
-        raise RuntimeError(f"All F5-TTS Spaces failed ({last_error}).")
+        raise RuntimeError(
+            f"Voice Cloning Space unavailable ({last_error}). "
+            "Create your free Space 'SRINIVASTA/f5-tts-cloner' on Hugging Face and enter its ID in the sidebar, "
+            "or select Option 2 (Groq Preset Voice) / Option 3 (Free Regional Neural Voice)."
+        )
