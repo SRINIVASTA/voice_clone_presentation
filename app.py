@@ -95,7 +95,6 @@ with st.sidebar:
 col_left, col_right = st.columns([1.1, 0.9], gap="large")
 
 with col_left:
-    voice_bytes = None
     if engine_choice == "Zero-Shot Voice Cloning (F5-TTS)":
         st.subheader("1. Reference Voice Sample (.wav)")
         input_method = st.radio("Audio Source", ["Upload .wav File", "Record Microphone"], horizontal=True)
@@ -103,12 +102,19 @@ with col_left:
         if input_method == "Upload .wav File":
             uploaded_wav = st.file_uploader("Upload clean 5–15 second speaker clip", type=["wav"])
             if uploaded_wav is not None:
-                voice_bytes = uploaded_wav.getvalue()
-                st.audio(voice_bytes, format="audio/wav")
+                wav_data = uploaded_wav.getvalue()
+                if wav_data:
+                    st.session_state["voice_bytes"] = wav_data
         else:
             mic_audio = st.audio_input("Record 5–15 seconds of clear speech")
             if mic_audio is not None:
-                voice_bytes = mic_audio.getvalue()
+                mic_data = mic_audio.getvalue()
+                if mic_data:
+                    st.session_state["voice_bytes"] = mic_data
+
+        voice_bytes = st.session_state.get("voice_bytes", None)
+        if voice_bytes:
+            st.audio(voice_bytes, format="audio/wav")
 
         if groq_enabled and voice_bytes:
             if st.button("✨ Auto-Transcribe Reference Audio (Groq Whisper)"):
@@ -118,6 +124,8 @@ with col_left:
                         st.success("Transcript extracted!")
                     except Exception as exc:
                         st.error(f"Transcription failed: {exc}")
+    else:
+        voice_bytes = None
 
     st.subheader("2. Presentation Script (.txt)")
     uploaded_script = st.file_uploader("Upload [MM:SS] timestamped script", type=["txt"])
@@ -150,11 +158,12 @@ with col_right:
     st.info(f"**Active Profile:** {selected_accent} (Speed: `{speech_speed}x`)")
 
     if run_btn:
+        active_voice_bytes = st.session_state.get("voice_bytes", None)
         if not consent_ok:
             st.error("Please confirm voice authorization before generating.")
         elif not timeline_items:
             st.warning("Please upload a valid .txt script with [MM:SS] markers.")
-        elif engine_choice == "Zero-Shot Voice Cloning (F5-TTS)" and (not voice_bytes or not ref_text.strip()):
+        elif engine_choice == "Zero-Shot Voice Cloning (F5-TTS)" and (not active_voice_bytes or not ref_text.strip()):
             st.warning("Please provide both a reference .wav clip and its exact reference text.")
         else:
             progress = st.progress(0, text="Initializing isolated session workspace...")
@@ -162,7 +171,7 @@ with col_right:
                 with tempfile.TemporaryDirectory() as session_dir:
                     norm_ref_path = os.path.join(session_dir, "norm_ref.wav")
                     if engine_choice == "Zero-Shot Voice Cloning (F5-TTS)":
-                        normalize_reference_audio(voice_bytes, norm_ref_path, max_duration_ms=15000)
+                        normalize_reference_audio(active_voice_bytes, norm_ref_path, max_duration_ms=15000)
                         use_remote_api = use_api_mode or (backend_type == "Public HF Cloud Spaces (No Key Needed)")
                         tts_engine = F5TTSClient(use_api=use_remote_api, hf_token=hf_token)
 
