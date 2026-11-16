@@ -107,48 +107,6 @@ flowchart TD
 
 ---
 
-## 🚀 Quickstart: Running on Google Colab (T4 GPU)
-
-To run zero-shot voice cloning locally on a free **Google Colab T4 GPU** with zero external Space quotas:
-
-```python
-import os, subprocess, time, urllib.request
-from google.colab import userdata
-
-# 1. Clone repository
-%cd /content
-!rm -rf voice_clone_presentation
-repo_url = "https://" + "://github.com" + "SRINIVASTA/" + "voice_clone_presentation.git"
-subprocess.run(["git", "clone", repo_url], check=True)
-%cd /content/voice_clone_presentation
-
-# 2. Bridge Colab Secrets into Streamlit Vault
-os.makedirs(".streamlit", exist_ok=True)
-with open(".streamlit/secrets.toml", "w") as f:
-    f.write("REQUIRE_AUTH = false\n")
-    for key in ("HF_TOKEN", "GROQ_API_KEY"):
-        try:
-            val = userdata.get(key)
-            if val:
-                f.write(f'{key} = "{val}"\n')
-        except Exception:
-            pass
-
-# 3. Install dependencies & launch Streamlit via Cloudflare Tunnel
-!pip install -q f5-tts streamlit pydub gradio_client huggingface_hub groq edge-tts scipy
-subprocess.Popen(
-    ["streamlit", "run", "app.py", "--server.port", "8501", "--server.address", "127.0.0.1",
-     "--server.headless", "true", "--server.enableCORS", "false", "--server.enableXsrfProtection", "false"]
-)
-for _ in range(30):
-    try:
-        urllib.request.urlopen("http://127.0.0.1:8501")
-        break
-    except Exception:
-        time.sleep(1)
-
-!npx -y cloudflared tunnel --url http://127.0.0.1:8501
-```
 
 ---
 
@@ -186,7 +144,7 @@ voice_clone_presentation/
 
 This project is an **AI-powered zero-shot voice cloning and presentation narration platform** intended strictly for educational, research, portfolio demonstration, and authorized content production purposes. Users must only synthesize voices that they own or for which they hold explicit, verifiable consent. Any unauthorized impersonation, deceptive audio generation, or misuse of synthetic voice technology is strictly prohibited.
 
-Users are responsible for securing their own optional `HF_TOKEN` and `GROQ_API_KEY` credentials locally or within Streamlit Cloud Secrets (`.streamlit/secrets.toml`), adhering to Hugging Face and Groq API terms of service and rate limits, and complying with applicable biometric and voice-likeness regulations.
+
 
 ---
 
