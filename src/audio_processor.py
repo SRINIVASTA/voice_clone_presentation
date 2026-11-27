@@ -3,9 +3,55 @@ import io
 import math
 import os
 import struct
+import subprocess
 import wave
 from typing import List, Tuple
 from pydub import AudioSegment, effects
+
+
+def extract_audio_from_video(video_path: str, output_wav_path: str, max_duration_sec: int = 12) -> str:
+    """Extracts mono 24kHz WAV directly from an uploaded video via FFmpeg without loading video into RAM."""
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-i", video_path,
+        "-vn",
+        "-acodec", "pcm_s16le",
+        "-ar", "24000",
+        "-ac", "1",
+    ]
+    if max_duration_sec > 0:
+        cmd.extend(["-t", str(max_duration_sec)])
+    cmd.append(output_wav_path)
+
+    subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    # Peak-normalize the extracted reference clip
+    audio = AudioSegment.from_wav(output_wav_path)
+    audio = effects.normalize(audio)
+    audio.export(output_wav_path, format="wav")
+    del audio
+    gc.collect()
+    return output_wav_path
+
+
+def replace_video_audio(video_path: str, new_wav_path: str, output_mp4_path: str) -> str:
+    """Copies the original video stream (-c:v copy) and muxes the cloned WAV track into a final MP4."""
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-i", video_path,
+        "-i", new_wav_path,
+        "-c:v", "copy",
+        "-c:a", "aac",
+        "-b:a", "192k",
+        "-map", "0:v:0",
+        "-map", "1:a:0",
+        "-shortest",
+        output_mp4_path,
+    ]
+    subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    return output_mp4_path
 
 
 def normalize_reference_audio(raw_bytes: bytes, output_path: str, max_duration_ms: int = 12000) -> str:
